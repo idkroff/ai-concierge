@@ -1,0 +1,11 @@
+services:
+  asterisk:
+    build: .
+    container_name: asterisk-caller
+    network_mode: host
+    volumes:
+      - ./sounds:/var/lib/asterisk/sounds/custom
+    environment:
+      - TZ=Europe/Moscow
+    restart: unless-stopped
+

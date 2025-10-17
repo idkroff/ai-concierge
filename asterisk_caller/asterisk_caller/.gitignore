@@ -1,0 +1,15 @@
+asterisk_caller
+*.exe
+
+sounds/
+*.wav
+*.mp3
+
+*.log
+
+# Secrets
+config/asterisk/pjsip.conf
+.env
+
+# Docker volumes
+data/
