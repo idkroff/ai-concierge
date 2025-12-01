@@ -1,0 +1,55 @@
+# Binaries (только в корне - с ведущим слэшем)
+/voice_agent
+/concierge
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Environment variables
+.env
+.env.local
+
+# Audio files
+sounds/*.wav
+recordings/*.wav
+*.mp3
+*.wav
+!sounds/.gitkeep
+!recordings/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+converted.wav
+converted_call.wav
+converted2.wav
+output.wav
+
+# Logs
+*.log
+
+# Asterisk
+config/asterisk/pjsip.conf

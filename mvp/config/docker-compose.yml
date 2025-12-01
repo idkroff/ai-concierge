@@ -1,0 +1,17 @@
+services:
+  asterisk:
+    build: .
+    container_name: asterisk-caller
+    ports:
+      - "5038:5038"  # AMI
+      - "5060:5060/udp"  # SIP
+      - "8088:8088"  # HTTP
+      - "10000-10099:10000-10099/udp"  # RTP
+    volumes:
+      - ./sounds:/var/lib/asterisk/sounds/custom
+    environment:
+      - TZ=Europe/Moscow
+    env_file:
+      - ../.env
+    restart: unless-stopped
+
