@@ -1,6 +1,5 @@
 # Binaries (только в корне - с ведущим слэшем)
-/voice_agent
-/concierge
+voice_agent
 *.exe
 *.exe~
 *.dll
