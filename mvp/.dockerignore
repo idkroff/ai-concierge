@@ -1,0 +1,45 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+README.md
+
+# Terraform
+terraform/
+*.tf
+*.tfvars
+.terraform/
+
+# Kubernetes
+k8s/
+
+# Build artifacts
+voice_agent
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+

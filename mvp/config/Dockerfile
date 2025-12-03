@@ -1,4 +1,4 @@
-FROM alpine:3.19
+FROM --platform=linux/amd64 alpine:3.19
 
 # Устанавливаем Asterisk и зависимости
 RUN apk add --no-cache \

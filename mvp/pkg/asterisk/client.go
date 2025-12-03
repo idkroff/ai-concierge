@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -34,12 +35,37 @@ type Config struct {
 
 // DefaultConfig возвращает конфигурацию по умолчанию
 func DefaultConfig() Config {
+	amiHost := os.Getenv("AMI_HOST")
+	if amiHost == "" {
+		amiHost = "127.0.0.1"
+	}
+
+	amiPort := os.Getenv("AMI_PORT")
+	if amiPort == "" {
+		amiPort = "5038"
+	}
+
+	amiUser := os.Getenv("AMI_USER")
+	if amiUser == "" {
+		amiUser = "goami"
+	}
+
+	amiPassword := os.Getenv("AMI_PASSWORD")
+	if amiPassword == "" {
+		amiPassword = "goamisecret123"
+	}
+
+	audioSocketPort := os.Getenv("AUDIO_SOCKET_PORT")
+	if audioSocketPort == "" {
+		audioSocketPort = ":9092"
+	}
+
 	return Config{
-		AMIHost:         "127.0.0.1",
-		AMIPort:         "5038",
-		AMIUser:         "goami",
-		AMIPassword:     "goamisecret123",
-		AudioSocketPort: ":9092",
+		AMIHost:         amiHost,
+		AMIPort:         amiPort,
+		AMIUser:         amiUser,
+		AMIPassword:     amiPassword,
+		AudioSocketPort: audioSocketPort,
 	}
 }
 
