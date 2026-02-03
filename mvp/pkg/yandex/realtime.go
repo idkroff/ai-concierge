@@ -18,6 +18,8 @@ type Event struct {
 	Audio    string          `json:"audio,omitempty"`
 	Delta    string          `json:"delta,omitempty"`
 	Response json.RawMessage `json:"response,omitempty"`
+	Error    json.RawMessage `json:"error,omitempty"`
+	Message  string          `json:"message,omitempty"`
 }
 
 type SessionUpdate struct {
@@ -128,8 +130,27 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("ошибка чтения session.created: %w", err)
 	}
 
+	// Логируем полученное событие для отладки
+	fmt.Printf("🔍 Получено событие от Yandex: type=%s\n", created.Type)
+	if created.Type == "error" || created.Message != "" {
+		errorDetails, _ := json.Marshal(created)
+		fmt.Printf("🔍 Детали события: %s\n", string(errorDetails))
+	}
+
 	if created.Type != "session.created" {
-		return fmt.Errorf("неожиданный тип события: %s", created.Type)
+		// Если пришла ошибка, выводим детали
+		if created.Type == "error" {
+			errorMsg := "неизвестная ошибка"
+			if created.Message != "" {
+				errorMsg = created.Message
+			} else if len(created.Error) > 0 {
+				errorMsg = string(created.Error)
+			}
+			// Пытаемся распарсить полный JSON ошибки
+			errorJSON, _ := json.MarshalIndent(created, "", "  ")
+			return fmt.Errorf("ошибка от Yandex API: %s\nДетали: %s", errorMsg, string(errorJSON))
+		}
+		return fmt.Errorf("неожиданный тип события: %s (ожидался session.created). Полное событие: %+v", created.Type, created)
 	}
 
 	// Запускаем обработчик событий ДО отправки session.update
