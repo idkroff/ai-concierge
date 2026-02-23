@@ -1,0 +1,5 @@
+# Скопировать в backend.hcl и подставить ключи сервисного аккаунта
+# с ролью storage.editor (или права на бакет concierge-terraform-state).
+# Создание ключа: Консоль → Service Accounts → Выбрать SA → Create access key
+access_key = "YOUR_ACCESS_KEY_ID"
+secret_key = "YOUR_SECRET_KEY"

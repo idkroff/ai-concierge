@@ -57,4 +57,3 @@ output "kubeconfig_command" {
   description = "Command to get kubeconfig"
   value       = "yc managed-kubernetes cluster get-credentials --id ${yandex_kubernetes_cluster.concierge_cluster.id} --external"
 }
-

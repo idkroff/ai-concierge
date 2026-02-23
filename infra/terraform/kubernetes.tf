@@ -499,4 +499,3 @@ resource "kubernetes_ingress_v1" "voice_agent_ingress" {
     }
   }
 }
-

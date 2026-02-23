@@ -1,0 +1,1 @@
+yc k8s cluster get-credentials --external --id cat391henhkptd5p3p6k --context-name ai-concierge

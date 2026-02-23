@@ -1,7 +1,6 @@
 variable "yandex_token" {
   description = "Yandex Cloud OAuth token"
   type        = string
-  sensitive   = true
 }
 
 variable "yandex_cloud_id" {
@@ -21,9 +20,9 @@ variable "yandex_zone" {
 }
 
 variable "cluster_version" {
-  description = "Kubernetes cluster version"
+  description = "Kubernetes cluster version (см. https://cloud.yandex.ru/docs/managed-kubernetes/concepts/release-channels)"
   type        = string
-  default     = "1.30"
+  default     = "1.31"
 }
 
 variable "node_count" {
@@ -50,37 +49,31 @@ variable "node_disk_size" {
   default     = 50
 }
 
-# Переменные для развертывания приложения
 variable "yandex_api_key" {
   description = "Yandex Cloud API Key для приложения"
   type        = string
-  sensitive   = true
 }
 
 variable "sip_user" {
   description = "SIP username"
   type        = string
-  sensitive   = true
 }
 
 variable "sip_password" {
   description = "SIP password"
   type        = string
-  sensitive   = true
 }
 
 variable "ami_user" {
   description = "Asterisk AMI username"
   type        = string
   default     = "goami"
-  sensitive   = true
 }
 
 variable "ami_password" {
   description = "Asterisk AMI password"
   type        = string
   default     = "goamisecret123"
-  sensitive   = true
 }
 
 variable "voice_agent_replicas" {
@@ -88,4 +81,3 @@ variable "voice_agent_replicas" {
   type        = number
   default     = 2
 }
-
