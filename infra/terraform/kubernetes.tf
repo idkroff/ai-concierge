@@ -79,8 +79,8 @@ resource "kubernetes_secret" "concierge_secrets" {
   type = "Opaque"
 
   data = {
-    API_KEY     = base64encode(var.yandex_api_key)
-    FOLDER      = base64encode(var.yandex_folder_id)
+    API_KEY     = base64encode(var.realtime_api_key)
+    FOLDER      = base64encode(var.realtime_folder_id)
     SIP_USER    = base64encode(var.sip_user)
     SIP_PASS    = base64encode(var.sip_password)
     AMI_USER    = base64encode(var.ami_user)
@@ -119,7 +119,7 @@ resource "kubernetes_deployment" "asterisk" {
       spec {
         container {
           name  = "asterisk"
-          image = "cr.yandex/${yandex_container_registry.concierge_registry.id}/asterisk:latest"
+          image = "cr.yandex/${yandex_container_registry.concierge_registry.id}/asterisk:${var.asterisk_version}"
           image_pull_policy = "Always"
 
           port {
@@ -264,7 +264,7 @@ resource "kubernetes_deployment" "voice_agent" {
       spec {
         container {
           name  = "voice-agent"
-          image = "cr.yandex/${yandex_container_registry.concierge_registry.id}/voice-agent:latest"
+          image = "cr.yandex/${yandex_container_registry.concierge_registry.id}/voice-agent:${var.voice_agent_version}"
           image_pull_policy = "Always"
 
           port {

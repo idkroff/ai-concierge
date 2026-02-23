@@ -13,6 +13,16 @@ variable "yandex_folder_id" {
   type        = string
 }
 
+variable "realtime_api_key" {
+  description = "Yandex Cloud Realtime API key"
+  type        = string
+}
+
+variable "realtime_folder_id" {
+  description = "Yandex Cloud Realtime Folder id"
+  type        = string
+}
+
 variable "yandex_zone" {
   description = "Yandex Cloud default zone"
   type        = string
@@ -80,4 +90,14 @@ variable "voice_agent_replicas" {
   description = "Number of voice-agent replicas"
   type        = number
   default     = 2
+}
+
+variable "asterisk_version" {
+  description = "Asterisk container version in registry"
+  type        = string
+}
+
+variable "voice_agent_version" {
+  description = "Voice agent container version in registry"
+  type        = string
 }
