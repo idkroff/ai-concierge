@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
-	"regexp"
+	"time"
 
 	"concierge/internal/models"
+	"concierge/internal/parser"
 	"concierge/internal/service"
 
 	"github.com/google/uuid"
@@ -14,11 +16,13 @@ import (
 
 type CallHandler struct {
 	service *service.CallService
+	parser  *parser.Parser
 }
 
-func NewCallHandler(service *service.CallService) *CallHandler {
+func NewCallHandler(service *service.CallService, parser *parser.Parser) *CallHandler {
 	return &CallHandler{
 		service: service,
+		parser:  parser,
 	}
 }
 
@@ -28,14 +32,19 @@ func (h *CallHandler) HandleCallStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	phoneNumber := r.URL.Query().Get("phone_number")
-	if phoneNumber == "" {
-		h.sendError(w, "Параметр phone_number обязателен", http.StatusBadRequest)
+	message := r.URL.Query().Get("message")
+	if message == "" {
+		h.sendError(w, "Параметр message обязателен", http.StatusBadRequest)
 		return
 	}
 
-	if !isValidPhoneNumber(phoneNumber) {
-		h.sendError(w, "Неверный формат номера телефона (ожидается 11 цифр, например: 79991234567)", http.StatusBadRequest)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	parsed, err := h.parser.Parse(ctx, message)
+	if err != nil {
+		log.Printf("❌ Ошибка парсинга сообщения: %v\n", err)
+		h.sendError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -50,9 +59,9 @@ func (h *CallHandler) HandleCallStart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 
-	log.Printf("[%s] 🚀 Звонок инициирован через API на номер %s\n", callID, phoneNumber)
+	log.Printf("[%s] 🚀 Звонок инициирован через API на номер %s\n", callID, parsed.PhoneNumber)
 
-	go h.service.HandleCall(callID, phoneNumber)
+	go h.service.HandleCall(callID, parsed.PhoneNumber, parsed.Context)
 }
 
 func (h *CallHandler) sendError(w http.ResponseWriter, message string, statusCode int) {
@@ -62,9 +71,3 @@ func (h *CallHandler) sendError(w http.ResponseWriter, message string, statusCod
 		Error: message,
 	})
 }
-
-func isValidPhoneNumber(phone string) bool {
-	matched, _ := regexp.MatchString(`^[0-9]{11}$`, phone)
-	return matched
-}
-

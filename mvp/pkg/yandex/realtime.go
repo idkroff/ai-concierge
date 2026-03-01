@@ -171,7 +171,7 @@ func (c *Client) updateSession() error {
 		Type: "session.update",
 		Session: SessionConfig{
 			Type:             "realtime",
-			OutputModalities: []string{"text", "audio"},
+			OutputModalities: []string{"audio"},
 			Audio: AudioConfig{
 				Input: InputAudioConfig{
 					Format: AudioFormat{
@@ -294,7 +294,12 @@ func (c *Client) eventLoop() {
 
 		// Логируем все события для отладки
 		if event.Type != "response.output_audio.delta" && event.Type != "response.output_text.delta" {
-			fmt.Printf("🔔 Yandex event: %s\n", event.Type)
+			if event.Type == "error" {
+				errorJSON, _ := json.MarshalIndent(event, "", "  ")
+				fmt.Printf("🔔 Yandex event: %s\n%s\n", event.Type, string(errorJSON))
+			} else {
+				fmt.Printf("🔔 Yandex event: %s\n", event.Type)
+			}
 		}
 
 		// Обрабатываем специфичные события

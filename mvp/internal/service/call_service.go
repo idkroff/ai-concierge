@@ -40,13 +40,15 @@ func NewCallService(config *models.AppConfig) (*CallService, error) {
 	}, nil
 }
 
-func (s *CallService) HandleCall(callID, phoneNumber string) {
+func (s *CallService) HandleCall(callID, phoneNumber, userContext string) {
 	log.Printf("[%s] 📞 Звонок на номер: %s\n", callID, phoneNumber)
+	log.Printf("[%s] 📝 Контекст: %s\n", callID, userContext)
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
-	yandexClient := yandex.NewClient(s.config.APIKey, s.config.Folder, s.config.Instructions)
+	instructions := s.config.BuildInstructions(userContext)
+	yandexClient := yandex.NewClient(s.config.APIKey, s.config.Folder, instructions)
 	if err := yandexClient.Connect(); err != nil {
 		log.Printf("[%s] ❌ Ошибка подключения к Yandex: %v\n", callID, err)
 		return
