@@ -31,6 +31,7 @@ type Config struct {
 	AMIUser         string
 	AMIPassword     string
 	AudioSocketPort string
+	PJSIPEndpoint  string // Имя PJSIP endpoint/trunk для исходящих (например zvonok)
 }
 
 // DefaultConfig возвращает конфигурацию по умолчанию
@@ -60,12 +61,18 @@ func DefaultConfig() Config {
 		audioSocketPort = ":9092"
 	}
 
+	pjsipEndpoint := os.Getenv("PJSIP_ENDPOINT")
+	if pjsipEndpoint == "" {
+		pjsipEndpoint = "zvonok"
+	}
+
 	return Config{
 		AMIHost:         amiHost,
 		AMIPort:         amiPort,
 		AMIUser:         amiUser,
 		AMIPassword:     amiPassword,
 		AudioSocketPort: audioSocketPort,
+		PJSIPEndpoint:   pjsipEndpoint,
 	}
 }
 
@@ -176,7 +183,7 @@ func (c *Client) MakeCall(ctx context.Context, phoneNumber string) (*AudioSessio
 	// Формируем AMI Originate запрос
 	msg := goami2.NewAction("Originate")
 	msg.AddActionID()
-	msg.AddField("Channel", fmt.Sprintf("PJSIP/%s@zvonok", phoneNumber))
+	msg.AddField("Channel", fmt.Sprintf("PJSIP/%s@%s", phoneNumber, c.config.PJSIPEndpoint))
 	msg.AddField("Context", "audiosocket")
 	msg.AddField("Exten", "s")
 	msg.AddField("Priority", "1")
@@ -230,12 +237,17 @@ func (c *Client) handleAMIEvents() {
 			case "OriginateResponse":
 				response := msg.Field("Response")
 				uniqueid := msg.Field("Uniqueid")
+				reason := msg.Field("Reason")
+				amiMsg := msg.Field("Message")
+				channel := msg.Field("Channel")
 
-				log.Printf("🔍 OriginateResponse: Response=%s, Uniqueid=%s", response, uniqueid)
+				log.Printf("🔍 OriginateResponse: Response=%s, Uniqueid=%s, Reason=%s, Channel=%s", response, uniqueid, reason, channel)
+				if amiMsg != "" {
+					log.Printf("🔍 OriginateResponse Message: %s", amiMsg)
+				}
 
 				if response == "Failure" {
-					reason := msg.Field("Reason")
-					log.Printf("⚠️  Originate failed: %s\n", reason)
+					log.Printf("⚠️  Originate failed: Reason=%s, Message=%s, Channel=%s", reason, amiMsg, channel)
 
 					// Удаляем из pending
 					c.pendingSessionsMu.Lock()

@@ -11,6 +11,7 @@ variable "yandex_cloud_id" {
 variable "yandex_folder_id" {
   description = "Yandex Cloud Folder ID"
   type        = string
+  default     = "b1gavd8lf4jso96pv233"
 }
 
 variable "realtime_api_key" {
@@ -86,6 +87,12 @@ variable "ami_password" {
   default     = "goamisecret123"
 }
 
+variable "pjsip_endpoint" {
+  description = "Имя PJSIP endpoint/trunk в Asterisk для исходящих звонков (должен существовать в pjsip.conf)"
+  type        = string
+  default     = "zvonok"
+}
+
 variable "voice_agent_replicas" {
   description = "Number of voice-agent replicas"
   type        = number
@@ -95,9 +102,19 @@ variable "voice_agent_replicas" {
 variable "asterisk_version" {
   description = "Asterisk container version in registry"
   type        = string
+  default     = "1.0.2"
 }
 
 variable "voice_agent_version" {
   description = "Voice agent container version in registry"
   type        = string
+  default     = "1.0.2"
+}
+
+variable "voice_agent_instructions" {
+  description = "Промпт/инструкции для голосового ассистента (Yandex Realtime)"
+  type        = string
+  default     = <<-EOT
+Тебе нужно очень уверенно доказывать ЧТО ТЫ КОМПЬЮТЕРНЫЙ СТУЛ.
+EOT
 }

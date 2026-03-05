@@ -4,6 +4,7 @@ RUN apk add --no-cache \
     asterisk \
     asterisk-sample-config \
     asterisk-sounds-en \
+    gettext \
     && rm -rf /var/cache/apk/*
 
 RUN mkdir -p /var/lib/asterisk/sounds/custom \
@@ -12,10 +13,10 @@ RUN mkdir -p /var/lib/asterisk/sounds/custom \
     && chown -R asterisk:asterisk /var/run/asterisk
 
 COPY config/asterisk/* /etc/asterisk/
-
-RUN chown -R asterisk:asterisk /etc/asterisk
+COPY docker-entrypoint.sh /
+RUN chown asterisk:asterisk /etc/asterisk && chmod +x /docker-entrypoint.sh
 
 EXPOSE 5060/udp 5038/tcp 10000-20000/udp
 
-CMD ["asterisk", "-f", "-vvvv", "-U", "asterisk", "-G", "asterisk"]
+CMD ["/docker-entrypoint.sh"]
 

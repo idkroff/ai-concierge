@@ -69,22 +69,22 @@ resource "kubernetes_config_map" "asterisk_config" {
   }
 }
 
-# Secret для приложения
-resource "kubernetes_secret" "concierge_secrets" {
+# Переменные окружения приложений (без Secret — обычный ConfigMap)
+resource "kubernetes_config_map" "concierge_env" {
   metadata {
-    name      = "concierge-secrets"
+    name      = "concierge-env"
     namespace = kubernetes_namespace.concierge.metadata[0].name
   }
 
-  type = "Opaque"
-
   data = {
-    API_KEY     = base64encode(var.realtime_api_key)
-    FOLDER      = base64encode(var.realtime_folder_id)
-    SIP_USER    = base64encode(var.sip_user)
-    SIP_PASS    = base64encode(var.sip_password)
-    AMI_USER    = base64encode(var.ami_user)
-    AMI_PASSWORD = base64encode(var.ami_password)
+    API_KEY        = var.realtime_api_key
+    FOLDER         = var.realtime_folder_id
+    SIP_USER       = var.sip_user
+    SIP_PASS       = var.sip_password
+    AMI_USER       = var.ami_user
+    AMI_PASSWORD   = var.ami_password
+    PJSIP_ENDPOINT = var.pjsip_endpoint
+    INSTRUCTIONS   = var.voice_agent_instructions
   }
 }
 
@@ -155,8 +155,8 @@ resource "kubernetes_deployment" "asterisk" {
           env {
             name = "SIP_USER"
             value_from {
-              secret_key_ref {
-                name = kubernetes_secret.concierge_secrets.metadata[0].name
+              config_map_key_ref {
+                name = kubernetes_config_map.concierge_env.metadata[0].name
                 key  = "SIP_USER"
               }
             }
@@ -165,8 +165,8 @@ resource "kubernetes_deployment" "asterisk" {
           env {
             name = "SIP_PASS"
             value_from {
-              secret_key_ref {
-                name = kubernetes_secret.concierge_secrets.metadata[0].name
+              config_map_key_ref {
+                name = kubernetes_config_map.concierge_env.metadata[0].name
                 key  = "SIP_PASS"
               }
             }
@@ -175,8 +175,8 @@ resource "kubernetes_deployment" "asterisk" {
           env {
             name = "AMI_USER"
             value_from {
-              secret_key_ref {
-                name = kubernetes_secret.concierge_secrets.metadata[0].name
+              config_map_key_ref {
+                name = kubernetes_config_map.concierge_env.metadata[0].name
                 key  = "AMI_USER"
               }
             }
@@ -185,8 +185,8 @@ resource "kubernetes_deployment" "asterisk" {
           env {
             name = "AMI_PASSWORD"
             value_from {
-              secret_key_ref {
-                name = kubernetes_secret.concierge_secrets.metadata[0].name
+              config_map_key_ref {
+                name = kubernetes_config_map.concierge_env.metadata[0].name
                 key  = "AMI_PASSWORD"
               }
             }
@@ -282,8 +282,8 @@ resource "kubernetes_deployment" "voice_agent" {
           env {
             name = "API_KEY"
             value_from {
-              secret_key_ref {
-                name = kubernetes_secret.concierge_secrets.metadata[0].name
+              config_map_key_ref {
+                name = kubernetes_config_map.concierge_env.metadata[0].name
                 key  = "API_KEY"
               }
             }
@@ -292,9 +292,29 @@ resource "kubernetes_deployment" "voice_agent" {
           env {
             name = "FOLDER"
             value_from {
-              secret_key_ref {
-                name = kubernetes_secret.concierge_secrets.metadata[0].name
+              config_map_key_ref {
+                name = kubernetes_config_map.concierge_env.metadata[0].name
                 key  = "FOLDER"
+              }
+            }
+          }
+
+          env {
+            name = "PJSIP_ENDPOINT"
+            value_from {
+              config_map_key_ref {
+                name = kubernetes_config_map.concierge_env.metadata[0].name
+                key  = "PJSIP_ENDPOINT"
+              }
+            }
+          }
+
+          env {
+            name = "INSTRUCTIONS"
+            value_from {
+              config_map_key_ref {
+                name = kubernetes_config_map.concierge_env.metadata[0].name
+                key  = "INSTRUCTIONS"
               }
             }
           }

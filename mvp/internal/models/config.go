@@ -8,40 +8,58 @@ import (
 	"github.com/joho/godotenv"
 )
 
-const instructionsTemplate = `Ты — голосовой ассистент, совершаешь звонок от имени пользователя.
-Твоя задача: {context}
+const defaultInstructions = `Ты - Анна, звонишь в ресторан забронировать столик.
 
-Говори ОЧЕНЬ КОРОТКО — максимум 1-2 предложения за раз.
-После каждой своей реплики жди ответа собеседника.
-Отвечай только на заданный вопрос, не повторяйся.
-Говори как обычный человек по телефону.
+Что нужно сделать:
+1. Поздороваться: "Добрый день! Меня зовут Анна."
+2. Сказать цель: "Хочу забронировать столик на двоих на сегодня на 19:00."
+3. Уточнить: "Можно ли столик у окна?"
+4. Если спросят телефон: "+7 991 404 30 03"
+5. Подтвердить детали
+6. Попрощаться: "Спасибо большое! До свидания."
+
+КРИТИЧЕСКИ ВАЖНО:
+- Говори ОЧЕНЬ КОРОТКО - максимум 1-2 предложения за раз
+- После каждой своей реплики жди ответа собеседника
+- Отвечай только на заданный вопрос
+- Не повторяйся
+- Говори как обычный человек по телефону
 
 СТРОГО ЗАПРЕЩЕНО:
 - НЕ добавляй в речь технические маркеры, скобки или пометки
 - НЕ генерируй реплики за собеседника
 - НЕ пиши "Пользователь:", "Ассистент:", "Администратор:" и т.п.
+- НЕ придумывай что говорит собеседник
 - Отвечай ТОЛЬКО за себя, не имитируй диалог
 
 ЗАВЕРШЕНИЕ РАЗГОВОРА:
-- Когда задача выполнена или собеседник не может помочь — попрощайся: "До свидания."
-- Система автоматически определит завершение по фразе "До свидания"`
+- Когда все детали уточнены, просто попрощайся: "Спасибо большое! До свидания."
+- Система автоматически определит завершение по фразе "До свидания"
+
+Примеры ПЛОХОГО поведения:
+- Говорить длинный монолог без пауз
+- Повторять одно и то же несколько раз
+- Писать "Пользователь: да конечно" или "Администратор: хорошо"
+
+Примеры ХОРОШЕГО поведения:
+- Короткая фраза, потом слушаешь ответ
+- На вопрос "Сколько человек?" отвечаешь только "Двое"
+
+Если тебя перебивают - значит ты говоришь слишком длинно!`
 
 type AppConfig struct {
-	APIKey   string
-	Folder   string
-	HTTPPort string
-}
-
-func (c *AppConfig) BuildInstructions(userContext string) string {
-	return strings.ReplaceAll(instructionsTemplate, "{context}", userContext)
+	APIKey       string
+	Folder       string
+	HTTPPort     string
+	Instructions string
 }
 
 func LoadConfig() (*AppConfig, error) {
 	_ = godotenv.Load()
 
-	apiKey := os.Getenv("API_KEY")
-	folder := os.Getenv("FOLDER")
-	httpPort := os.Getenv("HTTP_PORT")
+	apiKey := strings.TrimSpace(os.Getenv("API_KEY"))
+	folder := strings.TrimSpace(os.Getenv("FOLDER"))
+	httpPort := strings.TrimSpace(os.Getenv("HTTP_PORT"))
 
 	if apiKey == "" || folder == "" {
 		return nil, fmt.Errorf("API_KEY и FOLDER должны быть установлены в .env файле")
@@ -51,10 +69,15 @@ func LoadConfig() (*AppConfig, error) {
 		httpPort = "8080"
 	}
 
+	instructions := strings.TrimSpace(os.Getenv("INSTRUCTIONS"))
+	if instructions == "" {
+		instructions = defaultInstructions
+	}
+
 	return &AppConfig{
-		APIKey:   apiKey,
-		Folder:   folder,
-		HTTPPort: httpPort,
+		APIKey:       apiKey,
+		Folder:       folder,
+		HTTPPort:     httpPort,
+		Instructions: instructions,
 	}, nil
 }
-
