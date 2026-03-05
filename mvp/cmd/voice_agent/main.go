@@ -12,7 +12,6 @@ import (
 
 	"concierge/internal/handlers"
 	"concierge/internal/models"
-	"concierge/internal/parser"
 	"concierge/internal/service"
 )
 
@@ -30,11 +29,12 @@ func main() {
 	}
 	defer callService.Close()
 
-	p := parser.New(config.APIKey, config.Folder)
-	callHandler := handlers.NewCallHandler(callService, p)
+	callHandler := handlers.NewCallHandler(callService)
+	wsHandler := handlers.NewWSHandler(callService)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/call/start", callHandler.HandleCallStart)
+	mux.HandleFunc("/ws", wsHandler.ServeWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -47,7 +47,8 @@ func main() {
 
 	go func() {
 		log.Printf("🚀 HTTP сервер запущен на порту %s\n", config.HTTPPort)
-		log.Printf("📡 Endpoint: http://localhost:%s/call/start?message=...\n", config.HTTPPort)
+		log.Printf("📡 GET /call/start?phone_number=79914043003 — старт звонка (без событий)\n")
+		log.Printf("📡 WS /ws — подключение, затем {\"action\":\"start_call\",\"phone_number\":\"7999...\"} — поток событий\n")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("❌ Ошибка HTTP сервера: %v", err)
 		}

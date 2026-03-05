@@ -504,6 +504,18 @@ resource "kubernetes_ingress_v1" "voice_agent_ingress" {
     rule {
       http {
         path {
+          path      = "/ws"
+          path_type = "Prefix"
+          backend {
+            service {
+              name = kubernetes_service.voice_agent.metadata[0].name
+              port {
+                number = 8080
+              }
+            }
+          }
+        }
+        path {
           path      = "/"
           path_type = "Prefix"
           backend {

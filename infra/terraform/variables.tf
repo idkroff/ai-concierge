@@ -108,7 +108,7 @@ variable "asterisk_version" {
 variable "voice_agent_version" {
   description = "Voice agent container version in registry"
   type        = string
-  default     = "1.0.2"
+  default     = "1.0.3"
 }
 
 variable "voice_agent_instructions" {

@@ -1,14 +1,12 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
-	"time"
 
+	"concierge/internal/events"
 	"concierge/internal/models"
-	"concierge/internal/parser"
 	"concierge/internal/service"
 
 	"github.com/google/uuid"
@@ -16,13 +14,11 @@ import (
 
 type CallHandler struct {
 	service *service.CallService
-	parser  *parser.Parser
 }
 
-func NewCallHandler(service *service.CallService, parser *parser.Parser) *CallHandler {
+func NewCallHandler(service *service.CallService) *CallHandler {
 	return &CallHandler{
 		service: service,
-		parser:  parser,
 	}
 }
 
@@ -32,19 +28,9 @@ func (h *CallHandler) HandleCallStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := r.URL.Query().Get("message")
-	if message == "" {
-		h.sendError(w, "Параметр message обязателен", http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	parsed, err := h.parser.Parse(ctx, message)
-	if err != nil {
-		log.Printf("❌ Ошибка парсинга сообщения: %v\n", err)
-		h.sendError(w, err.Error(), http.StatusBadRequest)
+	phoneNumber := r.URL.Query().Get("phone_number")
+	if phoneNumber == "" {
+		h.sendError(w, "Параметр phone_number обязателен", http.StatusBadRequest)
 		return
 	}
 
@@ -59,9 +45,9 @@ func (h *CallHandler) HandleCallStart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 
-	log.Printf("[%s] 🚀 Звонок инициирован через API на номер %s\n", callID, parsed.PhoneNumber)
+	log.Printf("[%s] 🚀 Звонок инициирован через API на номер %s\n", callID, phoneNumber)
 
-	go h.service.HandleCall(callID, parsed.PhoneNumber, parsed.Context)
+	go h.service.HandleCall(callID, phoneNumber, events.NoopEmitter{})
 }
 
 func (h *CallHandler) sendError(w http.ResponseWriter, message string, statusCode int) {
