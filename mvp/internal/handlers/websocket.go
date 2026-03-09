@@ -31,6 +31,7 @@ func NewWSHandler(callService *service.CallService) *WSHandler {
 type ClientMessage struct {
 	Action      string `json:"action"`
 	PhoneNumber string `json:"phone_number"`
+	Text        string `json:"text"` // контекст задачи (цель звонка)
 }
 
 func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
@@ -65,12 +66,12 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 				emitter.Emit(events.NewCallError("", "phone_number required", "ws"))
 				continue
 			}
-			if !isValidPhoneNumber(msg.PhoneNumber) {
+			if len(msg.PhoneNumber) != 11 {
 				emitter.Emit(events.NewCallError("", "invalid phone_number (11 digits)", "ws"))
 				continue
 			}
 			callID := uuid.New().String()
-			go h.callService.HandleCall(callID, msg.PhoneNumber, emitter)
+			go h.callService.HandleCall(callID, msg.PhoneNumber, msg.Text, emitter)
 		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"concierge/internal/handlers"
 	"concierge/internal/models"
+	"concierge/internal/parser"
 	"concierge/internal/service"
 )
 
@@ -29,7 +30,8 @@ func main() {
 	}
 	defer callService.Close()
 
-	callHandler := handlers.NewCallHandler(callService)
+	p := parser.New(config.APIKey, config.Folder)
+	callHandler := handlers.NewCallHandler(callService, p)
 	wsHandler := handlers.NewWSHandler(callService)
 
 	mux := http.NewServeMux()

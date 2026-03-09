@@ -8,22 +8,13 @@ import (
 	"github.com/joho/godotenv"
 )
 
-const defaultInstructions = `Ты - Анна, звонишь в ресторан забронировать столик.
+const instructionsTemplate = `Ты — голосовой ассистент, совершаешь звонок от имени пользователя.
+Твоя задача: {context}
 
-Что нужно сделать:
-1. Поздороваться: "Добрый день! Меня зовут Анна."
-2. Сказать цель: "Хочу забронировать столик на двоих на сегодня на 19:00."
-3. Уточнить: "Можно ли столик у окна?"
-4. Если спросят телефон: "+7 991 404 30 03"
-5. Подтвердить детали
-6. Попрощаться: "Спасибо большое! До свидания."
-
-КРИТИЧЕСКИ ВАЖНО:
-- Говори ОЧЕНЬ КОРОТКО - максимум 1-2 предложения за раз
-- После каждой своей реплики жди ответа собеседника
-- Отвечай только на заданный вопрос
-- Не повторяйся
-- Говори как обычный человек по телефону
+Говори ОЧЕНЬ КОРОТКО — максимум 1-2 предложения за раз.
+После каждой своей реплики жди ответа собеседника.
+Отвечай только на заданный вопрос, не повторяйся.
+Говори как обычный человек по телефону.
 
 СТРОГО ЗАПРЕЩЕНО:
 - НЕ добавляй в речь технические маркеры, скобки или пометки
@@ -33,25 +24,18 @@ const defaultInstructions = `Ты - Анна, звонишь в ресторан
 - Отвечай ТОЛЬКО за себя, не имитируй диалог
 
 ЗАВЕРШЕНИЕ РАЗГОВОРА:
-- Когда все детали уточнены, просто попрощайся: "Спасибо большое! До свидания."
-- Система автоматически определит завершение по фразе "До свидания"
-
-Примеры ПЛОХОГО поведения:
-- Говорить длинный монолог без пауз
-- Повторять одно и то же несколько раз
-- Писать "Пользователь: да конечно" или "Администратор: хорошо"
-
-Примеры ХОРОШЕГО поведения:
-- Короткая фраза, потом слушаешь ответ
-- На вопрос "Сколько человек?" отвечаешь только "Двое"
-
-Если тебя перебивают - значит ты говоришь слишком длинно!`
+- Когда задача выполнена или собеседник не может помочь — попрощайся: "До свидания."
+- Система автоматически определит завершение по фразе "До свидания"`
 
 type AppConfig struct {
-	APIKey       string
-	Folder       string
-	HTTPPort     string
-	Instructions string
+	APIKey               string
+	Folder               string
+	HTTPPort             string
+	InstructionsTemplate string
+}
+
+func (c *AppConfig) BuildInstructions(userContext string) string {
+	return strings.ReplaceAll(c.InstructionsTemplate, "{context}", userContext)
 }
 
 func LoadConfig() (*AppConfig, error) {
@@ -69,15 +53,15 @@ func LoadConfig() (*AppConfig, error) {
 		httpPort = "8080"
 	}
 
-	instructions := strings.TrimSpace(os.Getenv("INSTRUCTIONS"))
-	if instructions == "" {
-		instructions = defaultInstructions
+	tmpl := strings.TrimSpace(os.Getenv("INSTRUCTIONS_TEMPLATE"))
+	if tmpl == "" {
+		tmpl = instructionsTemplate
 	}
 
 	return &AppConfig{
-		APIKey:       apiKey,
-		Folder:       folder,
-		HTTPPort:     httpPort,
-		Instructions: instructions,
+		APIKey:               apiKey,
+		Folder:               folder,
+		HTTPPort:             httpPort,
+		InstructionsTemplate: tmpl,
 	}, nil
 }

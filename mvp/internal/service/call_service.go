@@ -41,19 +41,21 @@ func NewCallService(config *models.AppConfig) (*CallService, error) {
 	}, nil
 }
 
-func (s *CallService) HandleCall(callID, phoneNumber string, em events.Emitter) {
+func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em events.Emitter) {
 	if em == nil {
 		em = events.NoopEmitter{}
 	}
 	log.Printf("[%s] 📞 Звонок на номер: %s\n", callID, phoneNumber)
+	log.Printf("[%s] 📝 Контекст: %s\n", callID, userContext)
 	em.Emit(events.NewCallStarted(callID, phoneNumber))
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
+	instructions := s.config.BuildInstructions(userContext)
 	em.Emit(events.NewCallConnecting(callID, "yandex"))
 	em.Emit(events.NewYandexConnecting(callID))
-	yandexClient := yandex.NewClient(s.config.APIKey, s.config.Folder, s.config.Instructions)
+	yandexClient := yandex.NewClient(s.config.APIKey, s.config.Folder, instructions)
 	if err := yandexClient.Connect(); err != nil {
 		log.Printf("[%s] ❌ Ошибка подключения к Yandex: %v\n", callID, err)
 		em.Emit(events.NewCallError(callID, err.Error(), "yandex"))
