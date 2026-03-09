@@ -4,65 +4,78 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	neturl "net/url"
-	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	wsURL string
 }
 
 func NewClient(baseURL string) *Client {
-	return &Client{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
-	}
+	return &Client{wsURL: baseURL + "/ws"}
 }
 
-type callStartResponse struct {
-	Status string `json:"status"`
-	CallID string `json:"call_id"`
-	Error  string `json:"error"`
+type startCallMsg struct {
+	Action string `json:"action"`
+	Text   string `json:"text"`
+}
+
+type event struct {
+	Type    string          `json:"type"`
+	CallID  string          `json:"call_id"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+type errorPayload struct {
+	Message string `json:"message"`
 }
 
 func (c *Client) StartCall(ctx context.Context, message string) (string, error) {
-	url := fmt.Sprintf("%s/call/start?message=%s", c.baseURL, neturl.QueryEscape(message))
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	dialer := websocket.DefaultDialer
+	conn, _, err := dialer.DialContext(ctx, c.wsURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", fmt.Errorf("ws dial: %w", err)
+	}
+	defer conn.Close()
+
+	go func() {
+		<-ctx.Done()
+		conn.Close()
+	}()
+
+	// Читаем ws.connected
+	if _, _, err := conn.ReadMessage(); err != nil {
+		return "", fmt.Errorf("ws read connected: %w", err)
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	rawBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-	log.Printf("caller-service response: status=%d body=%s", resp.StatusCode, string(rawBody))
-
-	var body callStartResponse
-	if err := json.Unmarshal(rawBody, &body); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+	// Отправляем команду старта звонка
+	cmd := startCallMsg{Action: "start_call", Text: message}
+	if err := conn.WriteJSON(cmd); err != nil {
+		return "", fmt.Errorf("ws write: %w", err)
 	}
 
-	if body.Error != "" {
-		return "", fmt.Errorf("caller-service error: %s", body.Error)
-	}
+	// Читаем события до call.started или call.error
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return "", fmt.Errorf("ws read: %w", err)
+		}
 
-	if body.Status != "ok" {
-		return "", fmt.Errorf("unexpected status: %s", body.Status)
-	}
+		var ev event
+		if err := json.Unmarshal(data, &ev); err != nil {
+			log.Printf("[caller-ws] unknown message: %s", string(data))
+			continue
+		}
 
-	return body.CallID, nil
+		switch ev.Type {
+		case "call.started":
+			return ev.CallID, nil
+		case "call.error":
+			var p errorPayload
+			_ = json.Unmarshal(ev.Payload, &p)
+			return "", fmt.Errorf("caller-service error: %s", p.Message)
+		}
+	}
 }

@@ -32,7 +32,7 @@ func main() {
 
 	p := parser.New(config.APIKey, config.Folder)
 	callHandler := handlers.NewCallHandler(callService, p)
-	wsHandler := handlers.NewWSHandler(callService)
+	wsHandler := handlers.NewWSHandler(callService, p)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/call/start", callHandler.HandleCallStart)
@@ -50,7 +50,7 @@ func main() {
 	go func() {
 		log.Printf("🚀 HTTP сервер запущен на порту %s\n", config.HTTPPort)
 		log.Printf("📡 GET /call/start?phone_number=79914043003 — старт звонка (без событий)\n")
-		log.Printf("📡 WS /ws — подключение, затем {\"action\":\"start_call\",\"phone_number\":\"7999...\"} — поток событий\n")
+		log.Printf("📡 WS /ws — подключение, затем {\"action\":\"start_call\",\"text\":\"...\"} или {\"action\":\"start_call\",\"phone_number\":\"7999...\",\"text\":\"...\"} — поток событий\n")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("❌ Ошибка HTTP сервера: %v", err)
 		}

@@ -1,5 +1,5 @@
 # Binaries (только в корне - с ведущим слэшем)
-voice_agent
+/voice_agent
 *.exe
 *.exe~
 *.dll
