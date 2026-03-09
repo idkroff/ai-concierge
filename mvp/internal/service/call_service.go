@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"concierge/internal/events"
 	"concierge/internal/models"
 	"concierge/pkg/asterisk"
 	"concierge/pkg/audio"
@@ -40,32 +41,43 @@ func NewCallService(config *models.AppConfig) (*CallService, error) {
 	}, nil
 }
 
-func (s *CallService) HandleCall(callID, phoneNumber, userContext string) {
+func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em events.Emitter) {
+	if em == nil {
+		em = events.NoopEmitter{}
+	}
 	log.Printf("[%s] 📞 Звонок на номер: %s\n", callID, phoneNumber)
 	log.Printf("[%s] 📝 Контекст: %s\n", callID, userContext)
+	em.Emit(events.NewCallStarted(callID, phoneNumber))
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
 	instructions := s.config.BuildInstructions(userContext)
+	em.Emit(events.NewCallConnecting(callID, "yandex"))
+	em.Emit(events.NewYandexConnecting(callID))
 	yandexClient := yandex.NewClient(s.config.APIKey, s.config.Folder, instructions)
 	if err := yandexClient.Connect(); err != nil {
 		log.Printf("[%s] ❌ Ошибка подключения к Yandex: %v\n", callID, err)
+		em.Emit(events.NewCallError(callID, err.Error(), "yandex"))
 		return
 	}
 	defer yandexClient.Close()
 	log.Printf("[%s] ✅ Подключено к Yandex Realtime API\n", callID)
+	em.Emit(events.NewYandexConnected(callID))
 
 	log.Printf("[%s] ⏳ Ожидание готовности сессии...\n", callID)
 	for !yandexClient.IsSessionReady() {
 		time.Sleep(100 * time.Millisecond)
 	}
 	log.Printf("[%s] ✅ Сессия готова\n", callID)
+	em.Emit(events.NewYandexSessionReady(callID))
 
 	log.Printf("[%s] 📞 Инициация звонка...\n", callID)
+	em.Emit(events.NewAsteriskOriginateSent(callID, phoneNumber))
 	session, err := s.asteriskClient.MakeCall(ctx, phoneNumber)
 	if err != nil {
 		log.Printf("[%s] ❌ Ошибка звонка: %v\n", callID, err)
+		em.Emit(events.NewCallError(callID, err.Error(), "asterisk"))
 		return
 	}
 
@@ -75,10 +87,14 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string) {
 	select {
 	case <-session.AudioSocketReady:
 		log.Printf("[%s] ✅ AudioSocket подключен и готов\n", callID)
+		em.Emit(events.NewAsteriskAudiosocketReady(callID))
 	case <-time.After(30 * time.Second):
 		log.Printf("[%s] ❌ Таймаут ожидания AudioSocket\n", callID)
+		em.Emit(events.NewCallError(callID, "audiosocket timeout", "asterisk"))
+		em.Emit(events.NewCallEnded(callID, "audiosocket_timeout"))
 		return
 	case <-ctx.Done():
+		em.Emit(events.NewCallEnded(callID, "cancelled"))
 		return
 	}
 
@@ -132,6 +148,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string) {
 				if len(audioData) > 0 {
 					log.Printf("[%s] 🎵 Получен аудио чанк от Yandex: %d байт (%.2f сек)\n",
 						callID, len(audioData), float64(len(audioData))/2.0/44100.0)
+					em.Emit(events.NewYandexAudioChunk(callID, len(audioData)))
 				}
 
 				resampled, err := resampler44to8.Resample(audioData)
@@ -173,6 +190,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string) {
 				}
 				fullText += text
 				log.Printf("[%s] %s", callID, text)
+				em.Emit(events.NewYandexTextDelta(callID, text))
 
 				if !farewellSent && (strings.Contains(fullText, "[ЗАВЕРШИТЬ]") ||
 					strings.Contains(fullText, "До свидания") ||
@@ -213,9 +231,11 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string) {
 				case "input_audio_buffer.speech_started":
 					log.Printf("[%s] 🎤 Речь обнаружена\n", callID)
 					speechDetected = true
+					em.Emit(events.NewYandexSpeechStarted(callID))
 
 				case "input_audio_buffer.speech_stopped":
 					log.Printf("[%s] 🔇 Речь остановлена\n", callID)
+					em.Emit(events.NewYandexSpeechStopped(callID))
 
 				case "input_audio_buffer.committed":
 					if speechDetected {
@@ -231,6 +251,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string) {
 
 				case "response.done":
 					log.Printf("[%s] ✅ Ответ завершен\n", callID)
+					em.Emit(events.NewYandexResponseDone(callID))
 					if farewellReceived && !responseDoneSent {
 						log.Printf("[%s] 🎯 response.done получен после прощания\n", callID)
 						responseDoneSent = true
@@ -288,25 +309,26 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string) {
 		log.Printf("[%s] ⚠️  Ошибка отправки приветствия: %v\n", callID, err)
 	}
 
+	var endReason string
 	select {
 	case <-ctx.Done():
+		endReason = "cancelled"
 		log.Printf("[%s] ⚠️  Прерывание по сигналу\n", callID)
-		if err := s.asteriskClient.Hangup(session); err != nil {
-			log.Printf("[%s] ⚠️  Ошибка завершения звонка: %v\n", callID, err)
-		}
 	case <-session.Done:
+		endReason = "abonent_hangup"
 		log.Printf("[%s] 📴 Звонок завершен абонентом\n", callID)
 	case <-shouldHangup:
+		endReason = "farewell"
 		log.Printf("[%s] 👋 Бот попрощался, завершаем звонок\n", callID)
-		if err := s.asteriskClient.Hangup(session); err != nil {
-			log.Printf("[%s] ⚠️  Ошибка завершения звонка: %v\n", callID, err)
-		}
 	case <-time.After(300 * time.Second):
+		endReason = "timeout"
 		log.Printf("[%s] ⏱️  Таймаут звонка (5 минут)\n", callID)
-		if err := s.asteriskClient.Hangup(session); err != nil {
-			log.Printf("[%s] ⚠️  Ошибка завершения звонка: %v\n", callID, err)
-		}
 	}
+	em.Emit(events.NewAsteriskHangup(callID))
+	if err := s.asteriskClient.Hangup(session); err != nil {
+		log.Printf("[%s] ⚠️  Ошибка завершения звонка: %v\n", callID, err)
+	}
+	em.Emit(events.NewCallEnded(callID, endReason))
 
 	done := make(chan struct{})
 	go func() {

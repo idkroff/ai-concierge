@@ -301,6 +301,10 @@ func (c *Client) eventLoop() {
 				fmt.Printf("🔔 Yandex event: %s\n", event.Type)
 			}
 		}
+		if event.Type == "error" {
+			details, _ := json.MarshalIndent(event, "", "  ")
+			fmt.Printf("❌ Yandex error event: %s\n", string(details))
+		}
 
 		// Обрабатываем специфичные события
 		switch event.Type {

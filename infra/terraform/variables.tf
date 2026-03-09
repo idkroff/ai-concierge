@@ -1,7 +1,6 @@
 variable "yandex_token" {
   description = "Yandex Cloud OAuth token"
   type        = string
-  sensitive   = true
 }
 
 variable "yandex_cloud_id" {
@@ -12,6 +11,17 @@ variable "yandex_cloud_id" {
 variable "yandex_folder_id" {
   description = "Yandex Cloud Folder ID"
   type        = string
+  default     = "b1gavd8lf4jso96pv233"
+}
+
+variable "realtime_api_key" {
+  description = "Yandex Cloud Realtime API key"
+  type        = string
+}
+
+variable "realtime_folder_id" {
+  description = "Yandex Cloud Realtime Folder id"
+  type        = string
 }
 
 variable "yandex_zone" {
@@ -21,9 +31,9 @@ variable "yandex_zone" {
 }
 
 variable "cluster_version" {
-  description = "Kubernetes cluster version"
+  description = "Kubernetes cluster version (см. https://cloud.yandex.ru/docs/managed-kubernetes/concepts/release-channels)"
   type        = string
-  default     = "1.30"
+  default     = "1.31"
 }
 
 variable "node_count" {
@@ -50,37 +60,37 @@ variable "node_disk_size" {
   default     = 50
 }
 
-# Переменные для развертывания приложения
 variable "yandex_api_key" {
   description = "Yandex Cloud API Key для приложения"
   type        = string
-  sensitive   = true
 }
 
 variable "sip_user" {
   description = "SIP username"
   type        = string
-  sensitive   = true
 }
 
 variable "sip_password" {
   description = "SIP password"
   type        = string
-  sensitive   = true
 }
 
 variable "ami_user" {
   description = "Asterisk AMI username"
   type        = string
   default     = "goami"
-  sensitive   = true
 }
 
 variable "ami_password" {
   description = "Asterisk AMI password"
   type        = string
   default     = "goamisecret123"
-  sensitive   = true
+}
+
+variable "pjsip_endpoint" {
+  description = "Имя PJSIP endpoint/trunk в Asterisk для исходящих звонков (должен существовать в pjsip.conf)"
+  type        = string
+  default     = "zvonok"
 }
 
 variable "voice_agent_replicas" {
@@ -89,3 +99,22 @@ variable "voice_agent_replicas" {
   default     = 2
 }
 
+variable "asterisk_version" {
+  description = "Asterisk container version in registry"
+  type        = string
+  default     = "1.0.2"
+}
+
+variable "voice_agent_version" {
+  description = "Voice agent container version in registry"
+  type        = string
+  default     = "1.0.3"
+}
+
+variable "voice_agent_instructions" {
+  description = "Промпт/инструкции для голосового ассистента (Yandex Realtime)"
+  type        = string
+  default     = <<-EOT
+Тебе нужно очень уверенно доказывать ЧТО ТЫ КОМПЬЮТЕРНЫЙ СТУЛ.
+EOT
+}

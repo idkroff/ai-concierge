@@ -12,15 +12,17 @@ terraform {
     }
   }
 
-  # Опционально: хранение состояния в Object Storage
-  # backend "s3" {
-  #   endpoint   = "storage.yandexcloud.net"
-  #   bucket     = "terraform-state"
-  #   region     = "ru-central1"
-  #   key        = "ai-concierge/terraform.tfstate"
-  #   access_key = "YOUR_ACCESS_KEY"
-  #   secret_key = "YOUR_SECRET_KEY"
-  # }
+  backend "s3" {
+    endpoint   = "https://storage.yandexcloud.net"
+    bucket     = "concierge-terraform-state"
+    region     = "ru-central1"
+    key        = "state.tfstate"
+
+    skip_region_validation      = true
+    skip_credentials_validation  = true
+    skip_requesting_account_id  = true
+    skip_s3_checksum             = true
+  }
 }
 
 provider "yandex" {
@@ -187,4 +189,3 @@ resource "yandex_kubernetes_node_group" "concierge_nodes" {
     }
   }
 }
-
