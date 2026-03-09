@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"tg_bot/internal/usecase"
 
@@ -13,14 +14,17 @@ import (
 const (
 	callbackConfirm = "confirm"
 	callbackCancel  = "cancel"
+
+	handlerTimeout = 30 * time.Second
 )
 
 type Handler struct {
-	uc *usecase.CallUsecase
+	uc  *usecase.CallUsecase
+	ctx context.Context
 }
 
-func NewHandler(uc *usecase.CallUsecase) *Handler {
-	return &Handler{uc: uc}
+func NewHandler(uc *usecase.CallUsecase, ctx context.Context) *Handler {
+	return &Handler{uc: uc, ctx: ctx}
 }
 
 func (h *Handler) Register(b *tele.Bot) {
@@ -36,7 +40,10 @@ func (h *Handler) Register(b *tele.Bot) {
 }
 
 func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) error {
-	req, err := h.uc.HandleMessage(context.Background(), c.Sender().ID, c.Text())
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	req, err := h.uc.HandleMessage(ctx, c.Sender().ID, c.Text())
 	if err != nil {
 		log.Printf("HandleMessage error: %v", err)
 		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
@@ -50,7 +57,10 @@ func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) erro
 }
 
 func (h *Handler) onConfirm(c tele.Context) error {
-	result, err := h.uc.ConfirmCall(context.Background(), c.Sender().ID)
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	result, err := h.uc.ConfirmCall(ctx, c.Sender().ID)
 	if err != nil {
 		log.Printf("ConfirmCall error: %v", err)
 		_ = c.Edit("Не удалось инициировать звонок: " + err.Error())
@@ -61,7 +71,10 @@ func (h *Handler) onConfirm(c tele.Context) error {
 }
 
 func (h *Handler) onCancel(c tele.Context) error {
-	if err := h.uc.CancelCall(context.Background(), c.Sender().ID); err != nil {
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	if err := h.uc.CancelCall(ctx, c.Sender().ID); err != nil {
 		log.Printf("CancelCall error: %v", err)
 	}
 	return c.Edit("❌ Звонок отменён.")

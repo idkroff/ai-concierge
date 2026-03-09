@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"tg_bot/config"
@@ -25,15 +29,27 @@ func main() {
 
 	b, err := tele.NewBot(tele.Settings{
 		Token:  cfg.BotToken,
-		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+		Poller: &tele.LongPoller{Timeout: 3 * time.Second},
 	})
 	if err != nil {
 		log.Fatalf("create bot: %v", err)
 	}
 
-	h := bot.NewHandler(uc)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	h := bot.NewHandler(uc, ctx)
 	h.Register(b)
 
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go b.Start()
 	log.Println("Bot started")
-	b.Start()
+
+	<-sigChan
+	log.Println("Shutting down...")
+	cancel()
+	b.Stop()
+
+	log.Println("Graceful shutdown complete")
 }

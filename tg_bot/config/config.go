@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -24,6 +25,7 @@ func Load() (*Config, error) {
 	if callerURL == "" {
 		callerURL = "http://localhost:8080"
 	}
+	callerURL = strings.TrimRight(callerURL, "/")
 
 	return &Config{
 		BotToken:         token,
