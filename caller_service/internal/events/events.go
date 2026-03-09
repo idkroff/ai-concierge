@@ -29,9 +29,10 @@ const (
 	YandexEvent         = "yandex.event"
 	YandexTextDelta     = "yandex.text_delta"
 	YandexAudioChunk    = "yandex.audio_chunk"
-	YandexSpeechStarted = "yandex.speech_started"
-	YandexSpeechStopped = "yandex.speech_stopped"
-	YandexResponseDone  = "yandex.response_done"
+	YandexSpeechStarted   = "yandex.speech_started"
+	YandexSpeechStopped   = "yandex.speech_stopped"
+	YandexResponseDone    = "yandex.response_done"
+	YandexInputTranscript = "yandex.input_transcript"
 )
 
 // Event — универсальный envelope для любого события.
@@ -126,6 +127,10 @@ func NewYandexSpeechStopped(callID string) Event {
 
 func NewYandexResponseDone(callID string) Event {
 	return newEvent(YandexResponseDone, callID, nil)
+}
+
+func NewYandexInputTranscript(callID, text string) Event {
+	return newEvent(YandexInputTranscript, callID, map[string]string{"text": text})
 }
 
 func newEvent(typ, callID string, payload any) Event {

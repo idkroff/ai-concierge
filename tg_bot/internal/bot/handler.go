@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"tg_bot/internal/usecase"
@@ -16,6 +17,9 @@ const (
 	callbackCancel  = "cancel"
 
 	handlerTimeout = 30 * time.Second
+
+	// Лимит текста в одном Telegram-сообщении
+	maxMessageLen = 3800
 )
 
 type Handler struct {
@@ -67,7 +71,17 @@ func (h *Handler) onConfirm(c tele.Context) error {
 		return nil
 	}
 
-	return c.Edit(fmt.Sprintf("✅ Звонок инициирован!\nID: <code>%s</code>", result.CallID), tele.ModeHTML)
+	shortID := result.CallID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+
+	statusMsg := c.Message()
+	_ = c.Edit(fmt.Sprintf("📞 Звонок <code>%s</code>\n\n⏳ Подключение...", shortID), tele.ModeHTML)
+
+	go h.streamUpdates(c.Bot(), c.Chat(), statusMsg, shortID, result.Updates)
+
+	return nil
 }
 
 func (h *Handler) onCancel(c tele.Context) error {
@@ -78,4 +92,82 @@ func (h *Handler) onCancel(c tele.Context) error {
 		log.Printf("CancelCall error: %v", err)
 	}
 	return c.Edit("❌ Звонок отменён.")
+}
+
+// streamUpdates отображает обновления звонка в Telegram — только форматирование и API-вызовы.
+func (h *Handler) streamUpdates(bot *tele.Bot, chat *tele.Chat, statusMsg *tele.Message, shortID string, updates <-chan usecase.CallUpdate) {
+	for upd := range updates {
+		if upd.Ended {
+			finalText := renderStatus(shortID, upd) + "\n📵 <b>Звонок завершён</b>"
+			_, _ = bot.Edit(statusMsg, finalText, tele.ModeHTML)
+			if upd.Error != "" {
+				_, _ = bot.Send(chat, "Ошибка: "+upd.Error)
+			} else {
+				_, _ = bot.Send(chat, "Причина завершения: "+formatReason(upd.EndReason))
+			}
+			return
+		}
+
+		text := renderStatus(shortID, upd)
+		if _, err := bot.Edit(statusMsg, text, tele.ModeHTML); err != nil {
+			log.Printf("[stream] edit message: %v", err)
+		}
+	}
+}
+
+// renderStatus форматирует текущее состояние звонка в HTML для Telegram.
+func renderStatus(shortID string, upd usecase.CallUpdate) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "📞 Звонок <code>%s</code>\n\n", shortID)
+
+	// Рендерим транскрипт, обрезая старые реплики если слишком длинно
+	transcriptText := renderTranscript(upd.Transcript)
+	b.WriteString(transcriptText)
+
+	if upd.AgentStreaming != "" {
+		b.WriteString("🤖 " + upd.AgentStreaming + "▌\n")
+	}
+	if upd.AbonentSpeaking {
+		b.WriteString("👤 <i>[говорит...]</i>\n")
+	}
+
+	return b.String()
+}
+
+// renderTranscript форматирует список реплик, обрезая с начала если превышен лимит.
+func renderTranscript(entries []usecase.TranscriptEntry) string {
+	lines := make([]string, 0, len(entries))
+	for _, e := range entries {
+		switch e.Role {
+		case usecase.RoleSystem:
+			lines = append(lines, "☎️ <b>"+e.Text+"</b>")
+		case usecase.RoleAgent:
+			lines = append(lines, "🤖 "+e.Text)
+		case usecase.RoleCallee:
+			lines = append(lines, "👤 "+e.Text)
+		}
+	}
+
+	// Обрезаем с начала пока не уложимся в лимит
+	text := strings.Join(lines, "\n") + "\n"
+	for len(text) > maxMessageLen && len(lines) > 1 {
+		lines = lines[1:]
+		text = "...\n" + strings.Join(lines, "\n") + "\n"
+	}
+	return text
+}
+
+func formatReason(reason string) string {
+	switch reason {
+	case "farewell":
+		return "агент попрощался"
+	case "abonent_hangup":
+		return "абонент положил трубку"
+	case "timeout":
+		return "таймаут (5 минут)"
+	case "cancelled":
+		return "отменён"
+	default:
+		return reason
+	}
 }

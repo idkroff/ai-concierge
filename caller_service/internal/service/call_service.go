@@ -228,6 +228,12 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em eve
 				}
 
 				switch event.Type {
+				case "conversation.item.input_audio_transcription.completed":
+					if event.Transcript != "" {
+						log.Printf("[%s] 👤 Транскрипция: %s\n", callID, event.Transcript)
+						em.Emit(events.NewYandexInputTranscript(callID, event.Transcript))
+					}
+
 				case "input_audio_buffer.speech_started":
 					log.Printf("[%s] 🎤 Речь обнаружена\n", callID)
 					speechDetected = true

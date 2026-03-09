@@ -7,4 +7,4 @@ require (
 	gopkg.in/telebot.v3 v3.3.8
 )
 
-require github.com/gorilla/websocket v1.5.3 // indirect
+require github.com/gorilla/websocket v1.5.3

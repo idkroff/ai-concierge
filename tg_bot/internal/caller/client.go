@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
+
+	"tg_bot/internal/domain/entity"
 
 	"github.com/gorilla/websocket"
 )
@@ -22,7 +25,7 @@ type startCallMsg struct {
 	Text   string `json:"text"`
 }
 
-type event struct {
+type wsEvent struct {
 	Type    string          `json:"type"`
 	CallID  string          `json:"call_id"`
 	Payload json.RawMessage `json:"payload"`
@@ -32,43 +35,71 @@ type errorPayload struct {
 	Message string `json:"message"`
 }
 
-func (c *Client) StartCall(ctx context.Context, message string) (string, error) {
-	dialer := websocket.DefaultDialer
-	conn, _, err := dialer.DialContext(ctx, c.wsURL, nil)
+func (c *Client) StartCall(ctx context.Context, message string) (string, <-chan entity.CallEvent, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.wsURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("ws dial: %w", err)
+		return "", nil, fmt.Errorf("ws dial: %w", err)
 	}
-	defer conn.Close()
-
-	go func() {
-		<-ctx.Done()
-		conn.Close()
-	}()
 
 	// Читаем ws.connected
 	if _, _, err := conn.ReadMessage(); err != nil {
-		return "", fmt.Errorf("ws read connected: %w", err)
+		conn.Close()
+		return "", nil, fmt.Errorf("ws read connected: %w", err)
 	}
 
-	// Отправляем команду старта звонка
-	cmd := startCallMsg{Action: "start_call", Text: message}
-	if err := conn.WriteJSON(cmd); err != nil {
-		return "", fmt.Errorf("ws write: %w", err)
+	// Отправляем команду
+	if err := conn.WriteJSON(startCallMsg{Action: "start_call", Text: message}); err != nil {
+		conn.Close()
+		return "", nil, fmt.Errorf("ws write: %w", err)
 	}
 
-	// Читаем события до call.started или call.error
+	// Ждём call.started или call.error (в рамках ctx с timeout)
+	callID, err := waitForCallStarted(ctx, conn)
+	if err != nil {
+		conn.Close()
+		return "", nil, err
+	}
+
+	// Дальше события идут в фоне - снимаем дедлайн и читаем до конца звонка
+	conn.SetReadDeadline(time.Time{})
+
+	events := make(chan entity.CallEvent, 32)
+	go func() {
+		defer close(events)
+		defer conn.Close()
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var ev wsEvent
+			if err := json.Unmarshal(data, &ev); err != nil {
+				log.Printf("[caller-ws] unknown message: %s", string(data))
+				continue
+			}
+			events <- entity.CallEvent{Type: ev.Type, CallID: ev.CallID, Payload: ev.Payload}
+			if ev.Type == "call.ended" || ev.Type == "call.error" {
+				return
+			}
+		}
+	}()
+
+	return callID, events, nil
+}
+
+func waitForCallStarted(ctx context.Context, conn *websocket.Conn) (string, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetReadDeadline(deadline)
+	}
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			return "", fmt.Errorf("ws read: %w", err)
 		}
-
-		var ev event
+		var ev wsEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			log.Printf("[caller-ws] unknown message: %s", string(data))
 			continue
 		}
-
 		switch ev.Type {
 		case "call.started":
 			return ev.CallID, nil
