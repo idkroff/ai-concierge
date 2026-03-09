@@ -79,6 +79,10 @@ func (c *Client) StartCall(ctx context.Context, message string) (string, <-chan 
 			}
 			events <- entity.CallEvent{Type: ev.Type, CallID: ev.CallID, Payload: ev.Payload}
 			if ev.Type == "call.ended" || ev.Type == "call.error" {
+				conn.WriteMessage(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+				)
 				return
 			}
 		}

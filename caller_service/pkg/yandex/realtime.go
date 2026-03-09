@@ -372,6 +372,11 @@ func (c *Client) Close() error {
 	c.connected = false
 
 	if c.conn != nil {
+		// Отправляем нормальный close-фрейм чтобы избежать 1006 abnormal closure на стороне eventLoop
+		_ = c.conn.WriteMessage(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		)
 		c.conn.Close()
 	}
 
