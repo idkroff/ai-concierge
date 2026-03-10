@@ -35,12 +35,18 @@ func (h *Handler) Register(b *tele.Bot) {
 	btnConfirm := tele.Btn{Text: "✅ Подтвердить", Unique: callbackConfirm}
 	btnCancel := tele.Btn{Text: "❌ Отмена", Unique: callbackCancel}
 
+	b.Handle("/start", h.onStart)
+
 	b.Handle(tele.OnText, func(c tele.Context) error {
 		return h.onMessage(c, btnConfirm, btnCancel)
 	})
 
 	b.Handle(&btnConfirm, h.onConfirm)
 	b.Handle(&btnCancel, h.onCancel)
+}
+
+func (h *Handler) onStart(c tele.Context) error {
+	return c.Send("Привет! Я ИИ-консьерж — могу позвонить ваши рутинные задачи за вас.\n\nПросто напишите, кому и зачем нужно позвонить, например:\n<i>7 995 123 45-67 забронируй столик у окна на 19:00</i>", tele.ModeHTML)
 }
 
 func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) error {

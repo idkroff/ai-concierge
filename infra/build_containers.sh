@@ -6,10 +6,12 @@ set -e
 
 VOICE_AGENT_VERSION=""
 ASTERISK_VERSION=""
+TG_BOT_VERSION=""
 for arg in "$@"; do
   case $arg in
     --voice_agent_version=*) VOICE_AGENT_VERSION="${arg#*=}" ;;
     --asterisk_version=*)    ASTERISK_VERSION="${arg#*=}" ;;
+    --tg_bot_version=*)      TG_BOT_VERSION="${arg#*=}" ;;
   esac
 done
 
@@ -22,8 +24,8 @@ REGISTRY_ID=$(cd $TERRAFORM_ROOT && terraform output -raw registry_id)
 
 echo "Registry ID: $REGISTRY_ID"
 
-if [[ -z "$VOICE_AGENT_VERSION" && -z "$ASTERISK_VERSION" ]]; then
-    echo "Укажите версию: ./build-containers.sh --voice_agent_version=X [--asterisk_version=Y]"
+if [[ -z "$VOICE_AGENT_VERSION" && -z "$ASTERISK_VERSION" && -z "$TG_BOT_VERSION" ]]; then
+    echo "Укажите версию: ./build-containers.sh --voice_agent_version=X [--asterisk_version=Y] [--tg_bot_version=Z]"
     exit 0
 fi
 
@@ -54,6 +56,17 @@ if [[ -n "$ASTERISK_VERSION" ]]; then
         -f "$PATH_TO_ASTERISK/Dockerfile" "$PATH_TO_ASTERISK" || { echo "❌ Ошибка сборки asterisk"; exit 1; }
     docker push "cr.yandex/${REGISTRY_ID}/asterisk:${ASTERISK_VERSION}" || { echo "❌ Ошибка загрузки asterisk"; exit 1; }
     echo "✅ asterisk:$ASTERISK_VERSION собран и загружен"
+fi
+
+if [[ -n "$TG_BOT_VERSION" ]]; then
+    echo "🔨 Сборка tg-bot:$TG_BOT_VERSION..."
+    docker buildx build \
+        --platform linux/amd64 \
+        --load \
+        -t "cr.yandex/${REGISTRY_ID}/tg-bot:${TG_BOT_VERSION}" \
+        -f "$REPO_ROOT/tg_bot/Dockerfile" "$REPO_ROOT/tg_bot" || { echo "❌ Ошибка сборки tg-bot"; exit 1; }
+    docker push "cr.yandex/${REGISTRY_ID}/tg-bot:${TG_BOT_VERSION}" || { echo "❌ Ошибка загрузки tg-bot"; exit 1; }
+    echo "✅ tg-bot:$TG_BOT_VERSION собран и загружен"
 fi
 
 echo "✅ Готово."

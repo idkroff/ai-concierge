@@ -111,6 +111,17 @@ variable "voice_agent_version" {
   default     = "1.0.4"
 }
 
+variable "tg_bot_token" {
+  description = "Telegram bot token"
+  type        = string
+}
+
+variable "tg_bot_version" {
+  description = "Telegram bot container version in registry"
+  type        = string
+  default     = "1.0.1"
+}
+
 variable "voice_agent_instructions" {
   description = "Промпт/инструкции для голосового ассистента (Yandex Realtime)"
   type        = string
