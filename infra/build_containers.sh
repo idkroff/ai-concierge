@@ -6,59 +6,67 @@ set -e
 
 VOICE_AGENT_VERSION=""
 ASTERISK_VERSION=""
+TG_BOT_VERSION=""
 for arg in "$@"; do
   case $arg in
     --voice_agent_version=*) VOICE_AGENT_VERSION="${arg#*=}" ;;
     --asterisk_version=*)    ASTERISK_VERSION="${arg#*=}" ;;
+    --tg_bot_version=*)      TG_BOT_VERSION="${arg#*=}" ;;
   esac
 done
 
-PATH_TO_ASTERISK="/Users/maximdervis/v5u90/studies/concierge/project/ai-concierge/asterisk_caller"
-PATH_TO_VOICE_AGENT="/Users/maximdervis/v5u90/studies/concierge/project/ai-concierge/mvp"
-TERRAFORM_ROOT="/Users/maximdervis/v5u90/studies/concierge/project/ai-concierge/infra/terraform"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+PATH_TO_ASTERISK="$REPO_ROOT/asterisk_caller"
+PATH_TO_VOICE_AGENT="$REPO_ROOT/caller_service"
+TERRAFORM_ROOT="$SCRIPT_DIR/terraform"
 REGISTRY_ID=$(cd $TERRAFORM_ROOT && terraform output -raw registry_id)
 
 echo "Registry ID: $REGISTRY_ID"
 
-if [[ -z "$VOICE_AGENT_VERSION" && -z "$ASTERISK_VERSION" ]]; then
-    echo "Укажите версию: ./build-containers.sh --voice_agent_version=X [--asterisk_version=Y]"
+if [[ -z "$VOICE_AGENT_VERSION" && -z "$ASTERISK_VERSION" && -z "$TG_BOT_VERSION" ]]; then
+    echo "Укажите версию: ./build-containers.sh --voice_agent_version=X [--asterisk_version=Y] [--tg_bot_version=Z]"
     exit 0
 fi
 
-if ! docker-buildx version >/dev/null 2>&1; then
-    echo "❌ docker-buildx не установлен или не доступен."
-fi
-
-if ! docker-buildx ls | grep -q multiplatform; then
+if ! docker buildx ls | grep -q multiplatform; then
     echo "🔧 Создание buildx builder..."
-    docker-buildx create --name multiplatform --driver docker-container
+    docker buildx create --name multiplatform --driver docker-container --use
+else
+    docker buildx use multiplatform
 fi
-
-docker-buildx use multiplatform
-PLATFORM="linux/amd64"
 
 if [[ -n "$VOICE_AGENT_VERSION" ]]; then
     echo "🔨 Сборка voice-agent:$VOICE_AGENT_VERSION..."
-    cd $PATH_TO_VOICE_AGENT
-    docker-buildx build \
-        --platform $PLATFORM \
+    docker buildx build \
+        --platform linux/amd64 \
         --load \
         -t "cr.yandex/${REGISTRY_ID}/voice-agent:${VOICE_AGENT_VERSION}" \
-        -f Dockerfile . || { echo "❌ Ошибка сборки voice-agent"; exit 1; }
+        -f "$PATH_TO_VOICE_AGENT/Dockerfile" "$PATH_TO_VOICE_AGENT" || { echo "❌ Ошибка сборки voice-agent"; exit 1; }
     docker push "cr.yandex/${REGISTRY_ID}/voice-agent:${VOICE_AGENT_VERSION}" || { echo "❌ Ошибка загрузки voice-agent"; exit 1; }
     echo "✅ voice-agent:$VOICE_AGENT_VERSION собран и загружен"
 fi
 
 if [[ -n "$ASTERISK_VERSION" ]]; then
     echo "🔨 Сборка asterisk:$ASTERISK_VERSION..."
-    cd $PATH_TO_ASTERISK
-    docker-buildx build \
-        --platform $PLATFORM \
+    docker buildx build \
+        --platform linux/amd64 \
         --load \
         -t "cr.yandex/${REGISTRY_ID}/asterisk:${ASTERISK_VERSION}" \
-        -f Dockerfile . || { echo "❌ Ошибка сборки asterisk"; exit 1; }
+        -f "$PATH_TO_ASTERISK/Dockerfile" "$PATH_TO_ASTERISK" || { echo "❌ Ошибка сборки asterisk"; exit 1; }
     docker push "cr.yandex/${REGISTRY_ID}/asterisk:${ASTERISK_VERSION}" || { echo "❌ Ошибка загрузки asterisk"; exit 1; }
     echo "✅ asterisk:$ASTERISK_VERSION собран и загружен"
+fi
+
+if [[ -n "$TG_BOT_VERSION" ]]; then
+    echo "🔨 Сборка tg-bot:$TG_BOT_VERSION..."
+    docker buildx build \
+        --platform linux/amd64 \
+        --load \
+        -t "cr.yandex/${REGISTRY_ID}/tg-bot:${TG_BOT_VERSION}" \
+        -f "$REPO_ROOT/tg_bot/Dockerfile" "$REPO_ROOT/tg_bot" || { echo "❌ Ошибка сборки tg-bot"; exit 1; }
+    docker push "cr.yandex/${REGISTRY_ID}/tg-bot:${TG_BOT_VERSION}" || { echo "❌ Ошибка загрузки tg-bot"; exit 1; }
+    echo "✅ tg-bot:$TG_BOT_VERSION собран и загружен"
 fi
 
 echo "✅ Готово."

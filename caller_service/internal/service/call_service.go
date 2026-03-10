@@ -134,6 +134,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em eve
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		firstChunk := true
 		for {
 			select {
 			case <-ctx.Done():
@@ -149,6 +150,13 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em eve
 					log.Printf("[%s] 🎵 Получен аудио чанк от Yandex: %d байт (%.2f сек)\n",
 						callID, len(audioData), float64(len(audioData))/2.0/44100.0)
 					em.Emit(events.NewYandexAudioChunk(callID, len(audioData)))
+				}
+
+				// Задержка перед первым чанком чтобы Asterisk успел подготовиться
+				// и не обрезал начало первого слова
+				if firstChunk {
+					firstChunk = false
+					time.Sleep(500 * time.Millisecond)
 				}
 
 				resampled, err := resampler44to8.Resample(audioData)
@@ -228,6 +236,12 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em eve
 				}
 
 				switch event.Type {
+				case "conversation.item.input_audio_transcription.completed":
+					if event.Transcript != "" {
+						log.Printf("[%s] 👤 Транскрипция: %s\n", callID, event.Transcript)
+						em.Emit(events.NewYandexInputTranscript(callID, event.Transcript))
+					}
+
 				case "input_audio_buffer.speech_started":
 					log.Printf("[%s] 🎤 Речь обнаружена\n", callID)
 					speechDetected = true
@@ -281,21 +295,26 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em eve
 			log.Printf("[%s] ⏳ Шаг 2/3: Генерация аудио завершена\n", callID)
 		case <-ctx.Done():
 			return
-		case <-time.After(10 * time.Second):
-			log.Printf("[%s] ⚠️  Таймаут ожидания response.done после прощания (10сек)\n", callID)
+		case <-time.After(3 * time.Second):
+			log.Printf("[%s] ⚠️  Таймаут ожидания response.done после прощания (3сек)\n", callID)
 			return
 		}
+
+		// Сигнализируем Producer что новых данных от Yandex не будет —
+		// он сольёт остатки в буфер и выйдет, что даёт Consumer-у возможность
+		// закрыть AllAudioSent штатно.
+		session.SignalAudioOutputDone()
 
 		select {
 		case <-session.AllAudioSent:
 			log.Printf("[%s] ⏳ Шаг 3/3: Все аудио отправлено в Asterisk\n", callID)
 		case <-ctx.Done():
 			return
-		case <-time.After(10 * time.Second):
-			log.Printf("[%s] ⚠️  Таймаут ожидания AllAudioSent (10сек), завершаем принудительно\n", callID)
+		case <-time.After(3 * time.Second):
+			log.Printf("[%s] ⚠️  Таймаут ожидания AllAudioSent (3сек), завершаем принудительно\n", callID)
 		}
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 		log.Printf("[%s] 👋 Все условия выполнены, завершаем звонок\n", callID)
 
 		select {

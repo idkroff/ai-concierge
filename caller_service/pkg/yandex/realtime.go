@@ -13,13 +13,14 @@ import (
 
 // Event types
 type Event struct {
-	Type     string          `json:"type"`
-	Session  json.RawMessage `json:"session,omitempty"`
-	Audio    string          `json:"audio,omitempty"`
-	Delta    string          `json:"delta,omitempty"`
-	Response json.RawMessage `json:"response,omitempty"`
-	Error    json.RawMessage `json:"error,omitempty"`
-	Message  string          `json:"message,omitempty"`
+	Type       string          `json:"type"`
+	Session    json.RawMessage `json:"session,omitempty"`
+	Audio      string          `json:"audio,omitempty"`
+	Delta      string          `json:"delta,omitempty"`
+	Response   json.RawMessage `json:"response,omitempty"`
+	Error      json.RawMessage `json:"error,omitempty"`
+	Message    string          `json:"message,omitempty"`
+	Transcript string          `json:"transcript,omitempty"`
 }
 
 type SessionUpdate struct {
@@ -40,8 +41,13 @@ type AudioConfig struct {
 }
 
 type InputAudioConfig struct {
-	Format        AudioFormat   `json:"format"`
-	TurnDetection TurnDetection `json:"turn_detection"`
+	Format                  AudioFormat                   `json:"format"`
+	TurnDetection           TurnDetection                 `json:"turn_detection"`
+	InputAudioTranscription InputAudioTranscriptionConfig `json:"input_audio_transcription"`
+}
+
+type InputAudioTranscriptionConfig struct {
+	Model string `json:"model"`
 }
 
 type OutputAudioConfig struct {
@@ -182,6 +188,9 @@ func (c *Client) updateSession() error {
 						Type:              "server_vad",
 						Threshold:         0.5,
 						SilenceDurationMs: 2200, // Увеличено с 400 до 1200мс - ждем дольше перед ответом
+					},
+					InputAudioTranscription: InputAudioTranscriptionConfig{
+						Model: "whisper-1",
 					},
 				},
 				Output: OutputAudioConfig{
@@ -363,6 +372,11 @@ func (c *Client) Close() error {
 	c.connected = false
 
 	if c.conn != nil {
+		// Отправляем нормальный close-фрейм чтобы избежать 1006 abnormal closure на стороне eventLoop
+		_ = c.conn.WriteMessage(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		)
 		c.conn.Close()
 	}
 

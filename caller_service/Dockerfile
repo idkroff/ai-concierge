@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 # Собираем бинарник для linux/amd64
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -o voice_agent ./cmd/voice_agent
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o voice_agent ./cmd/voice_agent
 
 # Финальный образ
 FROM alpine:3.19

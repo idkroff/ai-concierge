@@ -393,6 +393,66 @@ resource "kubernetes_deployment" "voice_agent" {
   }
 }
 
+# Deployment для tg_bot
+resource "kubernetes_deployment" "tg_bot" {
+  wait_for_rollout = false
+
+  metadata {
+    name      = "tg-bot"
+    namespace = kubernetes_namespace.concierge.metadata[0].name
+    labels = {
+      app = "tg-bot"
+    }
+  }
+
+  spec {
+    replicas = 1
+
+    selector {
+      match_labels = {
+        app = "tg-bot"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          app = "tg-bot"
+        }
+      }
+
+      spec {
+        container {
+          name              = "tg-bot"
+          image             = "cr.yandex/${yandex_container_registry.concierge_registry.id}/tg-bot:${var.tg_bot_version}"
+          image_pull_policy = "Always"
+
+          env {
+            name  = "BOT_TOKEN"
+            value = var.tg_bot_token
+          }
+
+          env {
+            name  = "CALLER_SERVICE_URL"
+            value = "ws://voice-agent-service:8080"
+          }
+
+          resources {
+            requests = {
+              memory = "256Mi"
+              cpu    = "500m"
+            }
+            limits = {
+              memory = "512Mi"
+              cpu    = "1000m"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 # Service для Asterisk
 resource "kubernetes_service" "asterisk" {
   wait_for_load_balancer = false

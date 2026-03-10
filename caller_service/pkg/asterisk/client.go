@@ -106,9 +106,19 @@ type AudioSession struct {
 	Done             chan struct{}
 	AudioSocketReady chan struct{} // Сигнал что AudioSocket подключен
 	AllAudioSent     chan struct{} // Сигнал что все аудио отправлено в Asterisk
-	doneOnce         sync.Once     // Защита от повторного закрытия
-	readyOnce        sync.Once     // Защита от повторного закрытия ready
-	audioSentOnce    sync.Once     // Защита от повторного закрытия audioSent
+	AudioOutputDone  chan struct{} // Сигнал от call_service: Yandex закончил генерацию аудио
+	doneOnce             sync.Once // Защита от повторного закрытия
+	readyOnce            sync.Once // Защита от повторного закрытия ready
+	audioSentOnce        sync.Once // Защита от повторного закрытия audioSent
+	audioOutputDoneOnce  sync.Once // Защита от повторного закрытия audioOutputDone
+}
+
+// SignalAudioOutputDone сигнализирует Producer-у что новых аудио-данных от Yandex не будет.
+// Producer сольёт остатки в буфер и завершится, что позволит AllAudioSent сработать штатно.
+func (s *AudioSession) SignalAudioOutputDone() {
+	s.audioOutputDoneOnce.Do(func() {
+		close(s.AudioOutputDone)
+	})
 }
 
 // NewClient создает новый Asterisk клиент
@@ -168,6 +178,7 @@ func (c *Client) MakeCall(ctx context.Context, phoneNumber string) (*AudioSessio
 		Done:             make(chan struct{}),
 		AudioSocketReady: make(chan struct{}),
 		AllAudioSent:     make(chan struct{}),
+		AudioOutputDone:  make(chan struct{}),
 	}
 
 	// Регистрируем сессию по sessionID
@@ -426,12 +437,11 @@ func (c *Client) handleAudioSocketConnection(conn net.Conn) {
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
-		defer log.Printf("🛑 Read goroutine завершена")
+		defer log.Printf("Read goroutine завершена")
 
 		for {
 			select {
 			case <-session.Done:
-				log.Printf("🛑 Read: получен сигнал session.Done, завершаемся")
 				return
 			default:
 			}
@@ -441,7 +451,7 @@ func (c *Client) handleAudioSocketConnection(conn net.Conn) {
 			n, err := io.ReadFull(conn, header)
 			if err != nil {
 				if err == io.EOF {
-					log.Printf("🛑 Read: получен EOF от Asterisk (Asterisk закрыл соединение)")
+					log.Printf("Read: AudioSocket закрыт Asterisk-ом (EOF)")
 				} else {
 					log.Printf("⚠️  Read: ошибка чтения заголовка: %v", err)
 				}
@@ -526,51 +536,96 @@ func (c *Client) handleAudioSocketConnection(conn net.Conn) {
 		defer log.Printf("✅ Producer завершен, сигнализируем Consumer")
 		const chunkSize = 320
 
+		// chunkAndBuffer разбивает audioData на пакеты по 320 байт и кладёт в буфер.
+		// Возвращает false если нужно завершиться (session.Done или readDone).
+		chunkAndBuffer := func(audioData []byte) bool {
+			for offset := 0; offset < len(audioData); offset += chunkSize {
+				end := offset + chunkSize
+				if end > len(audioData) {
+					end = len(audioData)
+				}
+				chunkLen := end - offset
+				chunk := make([]byte, chunkSize)
+				copy(chunk, audioData[offset:end])
+				if chunkLen < chunkSize {
+					log.Printf("⚠️  Producer: последний фрагмент %d байт, дополнен до 320 нулями", chunkLen)
+				}
+				select {
+				case packetBuffer <- chunk:
+				case <-session.Done:
+					return false
+				case <-readDone:
+					return false
+				}
+			}
+			return true
+		}
+
+		audioOutputDoneCh := session.AudioOutputDone
+
 		for {
 			select {
 			case <-session.Done:
 				return
 			case <-readDone:
 				return
+			case <-audioOutputDoneCh:
+				// Yandex больше не пришлёт аудио. Сливаем то, что ещё в пути.
+				// 2с — запас для in-flight chunks от горутины Yandex-аудио.
+				// Drain завершится раньше как только канал опустеет (default в select).
+				audioOutputDoneCh = nil
+				log.Printf("✅ Producer: сигнал AudioOutputDone, сливаем остатки...")
+				// Читаем из канала пока есть данные; выходим когда канал пуст 50мс подряд
+			// или общий таймаут 2с истёк (страховка).
+			drainTimeout := time.NewTimer(2 * time.Second)
+			idleTimer := time.NewTimer(50 * time.Millisecond)
+			defer drainTimeout.Stop()
+			defer idleTimer.Stop()
+			drain:
+				for {
+					select {
+					case <-session.Done:
+						return
+					case <-readDone:
+						return
+					case <-drainTimeout.C:
+						log.Printf("⚠️  Producer: таймаут слива (2с)")
+						break drain
+					case <-idleTimer.C:
+						// 50мс тишины — канал опустел
+						break drain
+					case audioData, ok := <-session.AudioOutput:
+						if !ok {
+							break drain
+						}
+						if len(audioData) > 0 {
+							if !chunkAndBuffer(audioData) {
+								return
+							}
+						}
+						// Сбрасываем idle-таймер: данные ещё идут
+						if !idleTimer.Stop() {
+							select {
+							case <-idleTimer.C:
+							default:
+							}
+						}
+						idleTimer.Reset(50 * time.Millisecond)
+					}
+				}
+				log.Printf("✅ Producer: слив завершён, выходим")
+				return
 			case audioData, ok := <-session.AudioOutput:
 				if !ok {
 					log.Printf("✅ Producer: канал AudioOutput закрыт. Завершаем Producer")
 					return
 				}
-
 				if len(audioData) == 0 {
 					continue
 				}
-
 				log.Printf("🎵 Producer: получен чанк от Yandex %d байт, разбиваем на пакеты по 320", len(audioData))
-
-				// Разбиваем на пакеты по 320 байт и складываем в буфер
-				for offset := 0; offset < len(audioData); offset += chunkSize {
-					end := offset + chunkSize
-					if end > len(audioData) {
-						end = len(audioData)
-					}
-
-					chunkLen := end - offset
-
-					// КРИТИЧЕСКИ ВАЖНО: всегда создаем пакеты ровно 320 байт!
-					// Если остаток меньше - дополняем нулями (тишиной)
-					chunk := make([]byte, chunkSize)
-					copy(chunk, audioData[offset:end])
-
-					if chunkLen < chunkSize {
-						log.Printf("⚠️  Producer: последний фрагмент %d байт, дополнен до 320 нулями", chunkLen)
-					}
-
-					// Складываем в буфер
-					select {
-					case packetBuffer <- chunk:
-						// Успешно добавили в буфер
-					case <-session.Done:
-						return
-					case <-readDone:
-						return
-					}
+				if !chunkAndBuffer(audioData) {
+					return
 				}
 			}
 		}
@@ -579,25 +634,25 @@ func (c *Client) handleAudioSocketConnection(conn net.Conn) {
 	// Goroutine 3 (Consumer): отправляем пакеты по таймеру 20ms
 	go func() {
 		defer close(writeDone)
-		defer log.Printf("🛑 Write goroutine завершена (отправлено %d пакетов)", packetsSent)
+		defer log.Printf("Write goroutine завершена (отправлено %d пакетов)", packetsSent)
 
 		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
 
 		var producerFinished bool
 		var emptyTicksAfterProducer int
+		producerDoneCh := producerDone
 
 		for {
 			select {
 			case <-session.Done:
-				log.Printf("🛑 Write: получен сигнал session.Done, завершаемся")
 				return
 			case <-readDone:
-				log.Printf("🛑 Write: readDone закрыт (Asterisk закрыл соединение), завершаемся")
 				return
-			case <-producerDone:
+			case <-producerDoneCh:
 				log.Printf("✅ Consumer: Producer завершен, будем отправлять остатки из буфера")
 				producerFinished = true
+				producerDoneCh = nil // закрытый канал срабатывал бы бесконечно
 			case <-ticker.C:
 				var chunk []byte
 				var msgType byte
@@ -614,8 +669,8 @@ func (c *Client) handleAudioSocketConnection(conn net.Conn) {
 					if producerFinished {
 						emptyTicksAfterProducer++
 						if emptyTicksAfterProducer >= 10 {
-							log.Printf("✅ Consumer: буфер пуст 200ms после завершения Producer, все аудио отправлено")
 							session.audioSentOnce.Do(func() {
+								log.Printf("✅ Consumer: все аудио отправлено в Asterisk")
 								close(session.AllAudioSent)
 							})
 						}

@@ -108,7 +108,18 @@ variable "asterisk_version" {
 variable "voice_agent_version" {
   description = "Voice agent container version in registry"
   type        = string
-  default     = "1.0.3"
+  default     = "1.0.4"
+}
+
+variable "tg_bot_token" {
+  description = "Telegram bot token"
+  type        = string
+}
+
+variable "tg_bot_version" {
+  description = "Telegram bot container version in registry"
+  type        = string
+  default     = "1.0.1"
 }
 
 variable "voice_agent_instructions" {
