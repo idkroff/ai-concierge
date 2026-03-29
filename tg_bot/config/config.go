@@ -11,6 +11,8 @@ import (
 type Config struct {
 	BotToken         string
 	CallerServiceURL string
+	YDBDSN           string
+	YDBSAKeyFile     string
 }
 
 func Load() (*Config, error) {
@@ -27,8 +29,20 @@ func Load() (*Config, error) {
 	}
 	callerURL = strings.TrimRight(callerURL, "/")
 
+	ydbDSN := os.Getenv("YDB_DSN")
+	if ydbDSN == "" {
+		return nil, fmt.Errorf("YDB_DSN is required")
+	}
+
+	ydbSAKeyFile := os.Getenv("YDB_SA_KEY_FILE")
+	if ydbSAKeyFile == "" {
+		return nil, fmt.Errorf("YDB_SA_KEY_FILE is required")
+	}
+
 	return &Config{
 		BotToken:         token,
 		CallerServiceURL: callerURL,
+		YDBDSN:           ydbDSN,
+		YDBSAKeyFile:     ydbSAKeyFile,
 	}, nil
 }

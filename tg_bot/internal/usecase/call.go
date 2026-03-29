@@ -51,7 +51,10 @@ type CallUsecase struct {
 	caller   CallerClient
 }
 
-func NewCallUsecase(sessions repo.SessionRepository, caller CallerClient) *CallUsecase {
+func NewCallUsecase(
+	sessions repo.SessionRepository,
+	caller CallerClient,
+) *CallUsecase {
 	return &CallUsecase{
 		sessions: sessions,
 		caller:   caller,
