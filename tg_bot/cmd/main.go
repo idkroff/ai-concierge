@@ -12,6 +12,7 @@ import (
 	"tg_bot/internal/bot"
 	"tg_bot/internal/caller"
 	"tg_bot/internal/repo/memory"
+	ydbRepo "tg_bot/internal/repo/ydb"
 	"tg_bot/internal/usecase"
 
 	tele "gopkg.in/telebot.v3"
@@ -23,9 +24,25 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ydbClient, err := ydbRepo.NewClient(ctx, cfg.YDBDSN, cfg.YDBSAKeyFile)
+	if err != nil {
+		log.Fatalf("ydb connect: %v", err)
+	}
+	defer func() { _ = ydbClient.Close(ctx) }()
+
+	if err := ydbClient.EnsureTables(ctx); err != nil {
+		log.Fatalf("ydb ensure tables: %v", err)
+	}
+
 	sessionRepo := memory.NewSessionRepository()
+	userRepo := ydbRepo.NewUserRepository(ydbClient)
+	usedCallsRepo := ydbRepo.NewUsedCallsRepository(ydbClient)
 	callerClient := caller.NewClient(cfg.CallerServiceURL)
-	uc := usecase.NewCallUsecase(sessionRepo, callerClient)
+
+	callUC := usecase.NewCallUsecase(sessionRepo, callerClient)
+	userUC := usecase.NewUserUsecase(userRepo)
 
 	b, err := tele.NewBot(tele.Settings{
 		Token:  cfg.BotToken,
@@ -35,9 +52,7 @@ func main() {
 		log.Fatalf("create bot: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	h := bot.NewHandler(uc, ctx)
+	h := bot.NewHandler(callUC, userUC, usedCallsRepo, ctx)
 	h.Register(b)
 
 	sigChan := make(chan os.Signal, 1)

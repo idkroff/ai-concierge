@@ -393,6 +393,17 @@ resource "kubernetes_deployment" "voice_agent" {
   }
 }
 
+resource "kubernetes_secret" "ydb_sa_key" {
+  metadata {
+    name      = "ydb-sa-key"
+    namespace = kubernetes_namespace.concierge.metadata[0].name
+  }
+
+  data = {
+    "sa-key.json" = var.ydb_sa_key_json
+  }
+}
+
 # Deployment для tg_bot
 resource "kubernetes_deployment" "tg_bot" {
   wait_for_rollout = false
@@ -437,6 +448,22 @@ resource "kubernetes_deployment" "tg_bot" {
             value = "ws://voice-agent-service:8080"
           }
 
+          env {
+            name  = "YDB_DSN"
+            value = "grpcs://ydb.serverless.yandexcloud.net:2135/ru-central1/b1gtm7vgbkkcd64rh3m8/etn752mqdjopimlmf0jk"
+          }
+
+          env {
+            name  = "YDB_SA_KEY_FILE"
+            value = "/secrets/ydb/sa-key.json"
+          }
+
+          volume_mount {
+            name       = "ydb-sa-key"
+            mount_path = "/secrets/ydb"
+            read_only  = true
+          }
+
           resources {
             requests = {
               memory = "256Mi"
@@ -446,6 +473,14 @@ resource "kubernetes_deployment" "tg_bot" {
               memory = "512Mi"
               cpu    = "1000m"
             }
+          }
+        }
+
+        volume {
+          name = "ydb-sa-key"
+
+          secret {
+            secret_name = kubernetes_secret.ydb_sa_key.metadata[0].name
           }
         }
       }

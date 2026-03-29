@@ -119,7 +119,13 @@ variable "tg_bot_token" {
 variable "tg_bot_version" {
   description = "Telegram bot container version in registry"
   type        = string
-  default     = "1.0.1"
+  default     = "1.1.1"
+}
+
+variable "ydb_sa_key_json" {
+  description = "Service account key JSON content for YDB access"
+  type        = string
+  sensitive   = true
 }
 
 variable "voice_agent_instructions" {

@@ -3,10 +3,13 @@ package bot
 import (
 	"context"
 	"fmt"
+	"html"
 	"log"
 	"strings"
 	"time"
 
+	"tg_bot/internal/domain/entity"
+	"tg_bot/internal/domain/repo"
 	"tg_bot/internal/usecase"
 
 	tele "gopkg.in/telebot.v3"
@@ -18,17 +21,22 @@ const (
 
 	handlerTimeout = 30 * time.Second
 
-	// Лимит текста в одном Telegram-сообщении
 	maxMessageLen = 3800
+
+	welcomeText     = "Я ИИ-консьерж — могу позвонить по вашим рутинным задачам за вас.\n\nПросто напишите, кому и зачем нужно позвонить, например:\n<i>7 995 123 45-67 забронируй столик у окна на 19:00</i>"
+	phoneOfferText  = "\n\nКстати, вы можете оставить свой номер телефона, чтобы мы могли связаться с вами по вашим задачам. Для этого нажмите кнопку ниже."
+	phoneSavedText  = "\n\n✅ Ваш номер телефона сохранён."
 )
 
 type Handler struct {
-	uc  *usecase.CallUsecase
-	ctx context.Context
+	callUC    *usecase.CallUsecase
+	userUC    *usecase.UserUsecase
+	usedCalls repo.UsedCallsRepository
+	ctx       context.Context
 }
 
-func NewHandler(uc *usecase.CallUsecase, ctx context.Context) *Handler {
-	return &Handler{uc: uc, ctx: ctx}
+func NewHandler(callUC *usecase.CallUsecase, userUC *usecase.UserUsecase, usedCalls repo.UsedCallsRepository, ctx context.Context) *Handler {
+	return &Handler{callUC: callUC, userUC: userUC, usedCalls: usedCalls, ctx: ctx}
 }
 
 func (h *Handler) Register(b *tele.Bot) {
@@ -36,9 +44,10 @@ func (h *Handler) Register(b *tele.Bot) {
 	btnCancel := tele.Btn{Text: "❌ Отмена", Unique: callbackCancel}
 
 	b.Handle("/start", h.onStart)
+	b.Handle(tele.OnContact, h.onContact)
 
 	b.Handle(tele.OnText, func(c tele.Context) error {
-		return h.onMessage(c, btnConfirm, btnCancel)
+		return h.onText(c, btnConfirm, btnCancel)
 	})
 
 	b.Handle(&btnConfirm, h.onConfirm)
@@ -46,14 +55,89 @@ func (h *Handler) Register(b *tele.Bot) {
 }
 
 func (h *Handler) onStart(c tele.Context) error {
-	return c.Send("Привет! Я ИИ-консьерж — могу позвонить ваши рутинные задачи за вас.\n\nПросто напишите, кому и зачем нужно позвонить, например:\n<i>7 995 123 45-67 забронируй столик у окна на 19:00</i>", tele.ModeHTML)
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	user, err := h.userUC.EnsureUser(ctx, c.Sender().ID)
+	if err != nil {
+		log.Printf("EnsureUser error: %v", err)
+		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
+	}
+
+	if user.Name != "" {
+		return h.sendWelcome(c, user, fmt.Sprintf("С возвращением, %s! ", html.EscapeString(user.Name)))
+	}
+
+	return c.Send("Привет! Как вас представлять?")
+}
+
+func (h *Handler) onContact(c tele.Context) error {
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	contact := c.Message().Contact
+	if contact == nil {
+		return nil
+	}
+
+	if contact.UserID != c.Sender().ID {
+		return c.Send("Пожалуйста, поделитесь своим номером телефона, а не чужим контактом.")
+	}
+
+	if err := h.userUC.SavePhone(ctx, c.Sender().ID, contact.PhoneNumber); err != nil {
+		log.Printf("SavePhone error: %v", err)
+		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
+	}
+
+	rm := &tele.ReplyMarkup{RemoveKeyboard: true}
+	return c.Send("Спасибо, ваш номер телефона сохранён!", rm)
+}
+
+func (h *Handler) sendWelcome(c tele.Context, user entity.User, greeting string) error {
+	text := greeting + welcomeText
+	if user.Phone != "" {
+		text += phoneSavedText
+		return c.Send(text, tele.ModeHTML)
+	}
+
+	text += phoneOfferText
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true, OneTimeKeyboard: true}
+	btnPhone := menu.Contact("📱 Поделиться номером телефона")
+	menu.Reply(menu.Row(btnPhone))
+	return c.Send(text, menu, tele.ModeHTML)
+}
+
+func (h *Handler) onText(c tele.Context, btnConfirm, btnCancel tele.Btn) error {
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	user, err := h.userUC.EnsureUser(ctx, c.Sender().ID)
+	if err != nil {
+		log.Printf("EnsureUser error: %v", err)
+		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
+	}
+
+	if user.Name == "" {
+		name := strings.TrimSpace(c.Text())
+		if name == "" {
+			return c.Send("Имя не может быть пустым. Как вас представлять?")
+		}
+		if err := h.userUC.SaveName(ctx, c.Sender().ID, name); err != nil {
+			log.Printf("SaveName error: %v", err)
+			return c.Send("Произошла ошибка. Попробуйте ещё раз.")
+		}
+		user.Name = name
+		return h.sendWelcome(c, user, fmt.Sprintf("Приятно познакомиться, %s! ", html.EscapeString(name)))
+	}
+
+	return h.onMessage(c, btnConfirm, btnCancel)
 }
 
 func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) error {
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
 
-	req, err := h.uc.HandleMessage(ctx, c.Sender().ID, c.Text())
+	req, err := h.callUC.HandleMessage(ctx, c.Sender().ID, c.Text())
 	if err != nil {
 		log.Printf("HandleMessage error: %v", err)
 		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
@@ -70,11 +154,15 @@ func (h *Handler) onConfirm(c tele.Context) error {
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
 
-	result, err := h.uc.ConfirmCall(ctx, c.Sender().ID)
+	result, err := h.callUC.ConfirmCall(ctx, c.Sender().ID)
 	if err != nil {
 		log.Printf("ConfirmCall error: %v", err)
 		_ = c.Edit("Не удалось инициировать звонок: " + err.Error())
 		return nil
+	}
+
+	if err := h.usedCalls.Increment(ctx, c.Sender().ID); err != nil {
+		log.Printf("IncrementCallCount error: %v", err)
 	}
 
 	shortID := result.CallID
@@ -94,13 +182,12 @@ func (h *Handler) onCancel(c tele.Context) error {
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
 
-	if err := h.uc.CancelCall(ctx, c.Sender().ID); err != nil {
+	if err := h.callUC.CancelCall(ctx, c.Sender().ID); err != nil {
 		log.Printf("CancelCall error: %v", err)
 	}
 	return c.Edit("❌ Звонок отменён.")
 }
 
-// streamUpdates отображает обновления звонка в Telegram — только форматирование и API-вызовы.
 func (h *Handler) streamUpdates(bot *tele.Bot, chat *tele.Chat, statusMsg *tele.Message, shortID string, updates <-chan usecase.CallUpdate) {
 	for upd := range updates {
 		if upd.Ended {
@@ -121,12 +208,10 @@ func (h *Handler) streamUpdates(bot *tele.Bot, chat *tele.Chat, statusMsg *tele.
 	}
 }
 
-// renderStatus форматирует текущее состояние звонка в HTML для Telegram.
 func renderStatus(shortID string, upd usecase.CallUpdate) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "📞 Звонок <code>%s</code>\n\n", shortID)
 
-	// Рендерим транскрипт, обрезая старые реплики если слишком длинно
 	transcriptText := renderTranscript(upd.Transcript)
 	b.WriteString(transcriptText)
 
@@ -140,7 +225,6 @@ func renderStatus(shortID string, upd usecase.CallUpdate) string {
 	return b.String()
 }
 
-// renderTranscript форматирует список реплик, обрезая с начала если превышен лимит.
 func renderTranscript(entries []usecase.TranscriptEntry) string {
 	lines := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -154,7 +238,6 @@ func renderTranscript(entries []usecase.TranscriptEntry) string {
 		}
 	}
 
-	// Обрезаем с начала пока не уложимся в лимит
 	text := strings.Join(lines, "\n") + "\n"
 	for len(text) > maxMessageLen && len(lines) > 1 {
 		lines = lines[1:]
