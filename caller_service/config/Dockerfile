@@ -31,5 +31,5 @@ EXPOSE 5060/udp 5038/tcp 10000-20000/udp
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 # Запуск Asterisk от root (для биндинга портов < 1024)
-CMD ["asterisk", "-f", "-vvvv", "-U", "asterisk", "-G", "asterisk"]
+CMD ["asterisk", "-f", "-vvvvv", "-U", "asterisk", "-G", "asterisk"]
 
