@@ -351,6 +351,7 @@ func (c *Client) startAudioSocketServer() error {
 				}
 			}
 
+			log.Printf("🔌 AudioSocket: входящее TCP-соединение от %s\n", conn.RemoteAddr())
 			go c.handleAudioSocketConnection(conn)
 		}
 	}()
@@ -369,14 +370,13 @@ func (c *Client) handleAudioSocketConnection(conn net.Conn) {
 	}
 
 	remoteAddr := conn.RemoteAddr().String()
-	fmt.Printf("🔌 AudioSocket подключение от %s\n", remoteAddr)
 
 	// Читаем первый пакет чтобы получить UUID из диалплана
 	// UUID передается в первом AudioSocket пакете
 	header := make([]byte, 3)
 	_, err := io.ReadFull(conn, header)
 	if err != nil {
-		log.Printf("⚠️  Ошибка чтения первого пакета: %v\n", err)
+		log.Printf("⚠️  AudioSocket %s: ошибка чтения первого пакета: %v\n", remoteAddr, err)
 		return
 	}
 

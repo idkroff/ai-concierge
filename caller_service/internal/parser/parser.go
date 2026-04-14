@@ -48,9 +48,55 @@ const (
 
 var digitsOnly = regexp.MustCompile(`\D`)
 
-type llmParsed struct {
-	PhoneNumber string `xml:"phone_number"`
-	Context     string `xml:"context"`
+// llmParsedFlexible — YandexGPT иногда оборачивает ответ в <output>, иногда кладёт теги в корень;
+// иногда добавляет markdown ``` вокруг XML.
+type llmParsedFlexible struct {
+	PhoneDirect string `xml:"phone_number"`
+	CtxDirect   string `xml:"context"`
+	Output      struct {
+		Phone string `xml:"phone_number"`
+		Ctx   string `xml:"context"`
+	} `xml:"output"`
+}
+
+func (f llmParsedFlexible) phoneAndContext() (phone, ctx string) {
+	p, c := strings.TrimSpace(f.Output.Phone), strings.TrimSpace(f.Output.Ctx)
+	if p != "" || c != "" {
+		return p, c
+	}
+	return strings.TrimSpace(f.PhoneDirect), strings.TrimSpace(f.CtxDirect)
+}
+
+var rePhoneTag = regexp.MustCompile(`(?i)<phone_number>\s*([^<]*?)\s*</phone_number>`)
+var reCtxTag = regexp.MustCompile(`(?i)<context>\s*([^<]*?)\s*</context>`)
+
+func stripMarkdownFences(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "```") {
+		return s
+	}
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSpace(s)
+	if nl := strings.IndexByte(s, '\n'); nl != -1 {
+		first := strings.ToLower(strings.TrimSpace(s[:nl]))
+		if first == "xml" || first == "html" {
+			s = strings.TrimSpace(s[nl+1:])
+		}
+	}
+	if i := strings.LastIndex(s, "```"); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
+}
+
+func extractTagsFallback(s string) (phone, ctx string) {
+	if m := rePhoneTag.FindStringSubmatch(s); len(m) > 1 {
+		phone = strings.TrimSpace(m[1])
+	}
+	if m := reCtxTag.FindStringSubmatch(s); len(m) > 1 {
+		ctx = strings.TrimSpace(m[1])
+	}
+	return phone, ctx
 }
 
 type Result struct {
@@ -144,14 +190,16 @@ func (p *Parser) Parse(ctx context.Context, message string) (*Result, error) {
 		return nil, fmt.Errorf("LLM returned no alternatives")
 	}
 
-	rawText := llmResp.Result.Alternatives[0].Message.Text
+	rawText := stripMarkdownFences(llmResp.Result.Alternatives[0].Message.Text)
 
-	var parsed llmParsed
-	if err := xml.Unmarshal([]byte("<root>"+rawText+"</root>"), &parsed); err != nil {
-		return nil, fmt.Errorf("parse LLM XML output: %w (raw: %q)", err, rawText)
+	var flex llmParsedFlexible
+	rawPhone, rawCtx := "", ""
+	if err := xml.Unmarshal([]byte("<root>"+rawText+"</root>"), &flex); err == nil {
+		rawPhone, rawCtx = flex.phoneAndContext()
 	}
-
-	rawPhone := strings.TrimSpace(parsed.PhoneNumber)
+	if rawPhone == "" {
+		rawPhone, rawCtx = extractTagsFallback(rawText)
+	}
 	if rawPhone == "" {
 		return nil, fmt.Errorf("не удалось извлечь номер телефона из сообщения")
 	}
@@ -163,6 +211,6 @@ func (p *Parser) Parse(ctx context.Context, message string) (*Result, error) {
 
 	return &Result{
 		PhoneNumber: digits,
-		Context:     strings.TrimSpace(parsed.Context),
+		Context:     rawCtx,
 	}, nil
 }
