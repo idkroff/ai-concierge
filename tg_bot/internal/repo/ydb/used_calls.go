@@ -44,7 +44,6 @@ func (r *UsedCallsRepository) Increment(ctx context.Context, userID int64) error
 	return r.upsert(ctx, userID, count+1, dropTS)
 }
 
-// Reset обнуляет дневной счётчик звонков пользователя.
 func (r *UsedCallsRepository) Reset(ctx context.Context, userID int64) error {
 	return r.upsert(ctx, userID, 0, time.Now())
 }

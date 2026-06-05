@@ -49,8 +49,7 @@ type apiError struct {
 	Error string `json:"error"`
 }
 
-// Parse — preview: разбирает сообщение (и резолвит телефон по названию организации)
-// через HTTP /parse caller-сервиса, БЕЗ старта звонка.
+// Parse — preview через /parse caller-сервиса: резолв номера без старта звонка.
 func (c *Client) Parse(ctx context.Context, message string) (*entity.ParsedCall, error) {
 	body, err := json.Marshal(parseRequest{Text: message})
 	if err != nil {

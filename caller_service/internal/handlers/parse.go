@@ -11,9 +11,7 @@ import (
 	"concierge/internal/parser"
 )
 
-// ParseHandler — preview-эндпоинт: парсит сообщение (и при необходимости резолвит
-// телефон по названию организации) БЕЗ старта звонка. Используется ботом, чтобы
-// показать пользователю найденный номер до набора.
+// ParseHandler — preview /parse: разбор сообщения и резолв номера без старта звонка.
 type ParseHandler struct {
 	parser *parser.Parser
 }

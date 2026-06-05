@@ -119,7 +119,7 @@ variable "tg_bot_token" {
 variable "tg_bot_version" {
   description = "Telegram bot container version in registry"
   type        = string
-  default     = "1.2.1"
+  default     = "1.2.2"
 }
 
 variable "tg_proxy_url" {

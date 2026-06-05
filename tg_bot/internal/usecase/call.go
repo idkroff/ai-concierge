@@ -39,11 +39,11 @@ type CallUpdate struct {
 }
 
 type ConfirmationRequest struct {
-	PhoneNumber  string // нормализованный 11-значный номер
-	Organization string // название организации, если номер найден по нему (иначе пусто)
-	Context      string // цель звонка
-	DisplayName  string // описание найденной точки (название + адрес)
-	IsHotline    bool   // номер похож на федеральную горячую линию (8-800)
+	PhoneNumber  string
+	Organization string
+	Context      string
+	DisplayName  string
+	IsHotline    bool
 }
 
 type CallResult struct {
@@ -106,7 +106,7 @@ func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64, callerName 
 		return nil, fmt.Errorf("unexpected session state: %s", session.State)
 	}
 
-	// Если у пользователя задано имя — звоним от его имени (подставляем в контекст агенту).
+	// если имя задано — агент звонит от его имени
 	taskContext := session.PendingContext
 	if callerName != "" {
 		taskContext = fmt.Sprintf("Ты звонишь от имени человека по имени %s. %s", callerName, session.PendingContext)

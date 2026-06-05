@@ -109,14 +109,13 @@ func extractTagsFallback(s string) (phone, org, ctx string) {
 }
 
 type Result struct {
-	PhoneNumber  string // 11 цифр без пробелов, например 79991234567
-	Context      string // цель звонка без номера
-	Organization string // заполняется, если номер найден по названию организации
-	DisplayName  string // описание найденной точки (название + адрес), если резолвили
-	IsHotline    bool   // номер похож на федеральную горячую линию (8-800)
+	PhoneNumber  string
+	Context      string
+	Organization string
+	DisplayName  string
+	IsHotline    bool
 }
 
-// PhoneResolver находит телефон организации по её свободному названию.
 type PhoneResolver interface {
 	Resolve(ctx context.Context, query string) (*orgsearch.Result, error)
 }

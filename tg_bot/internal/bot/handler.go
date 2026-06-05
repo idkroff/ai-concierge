@@ -33,6 +33,7 @@ const (
 
 var nonDigitRe = regexp.MustCompile(`\D`)
 
+// номера (11 цифр) с доступом к /droplimits
 var droplimitsWhitelist = map[string]bool{
 	"79914043003": true,
 }
@@ -53,6 +54,7 @@ func (h *Handler) Register(b *tele.Bot) {
 	btnCancel := tele.Btn{Text: "❌ Отмена", Unique: callbackCancel}
 
 	b.Handle("/start", h.onStart)
+	b.Handle("/help", h.onHelp)
 	b.Handle("/name", h.onName)
 	b.Handle("/droplimits", h.onDropLimits)
 	b.Handle(tele.OnContact, h.onContact)
@@ -63,10 +65,18 @@ func (h *Handler) Register(b *tele.Bot) {
 
 	b.Handle(&btnConfirm, h.onConfirm)
 	b.Handle(&btnCancel, h.onCancel)
+
+	// /droplimits намеренно не публикуем — админская
+	if err := b.SetCommands([]tele.Command{
+		{Text: "start", Description: "Запуск и краткая справка"},
+		{Text: "help", Description: "Помощь"},
+		{Text: "name", Description: "Имя, от которого я звоню"},
+	}); err != nil {
+		log.Printf("SetCommands error: %v", err)
+	}
 }
 
-// requirePhone гарантирует, что пользователь зарегистрирован (поделился номером).
-// Если нет — просит поделиться номером и возвращает ok=false.
+// возвращает false и просит поделиться номером, если пользователь не зарегистрирован
 func (h *Handler) requirePhone(ctx context.Context, c tele.Context) (entity.User, bool) {
 	user, err := h.userUC.EnsureUser(ctx, c.Sender().ID)
 	if err != nil {
@@ -101,6 +111,10 @@ func (h *Handler) onStart(c tele.Context) error {
 	if user.Phone == "" {
 		return h.askPhone(c)
 	}
+	return c.Send(readyText, tele.ModeHTML)
+}
+
+func (h *Handler) onHelp(c tele.Context) error {
 	return c.Send(readyText, tele.ModeHTML)
 }
 
@@ -152,8 +166,7 @@ func (h *Handler) onName(c tele.Context) error {
 	return c.Send(fmt.Sprintf("✅ Имя сохранено: <b>%s</b>", html.EscapeString(name)), tele.ModeHTML)
 }
 
-// onDropLimits сбрасывает дневной счётчик звонков вызывающего. Доступна только
-// номерам из whitelist (droplimitsWhitelist).
+// /droplimits — сброс своего дневного счётчика; только для droplimitsWhitelist
 func (h *Handler) onDropLimits(c tele.Context) error {
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
@@ -195,8 +208,7 @@ func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) erro
 		return c.Send(limitText)
 	}
 
-	// Резолв номера (особенно по названию организации) может занять несколько секунд —
-	// показываем промежуточный статус, который потом превращаем в подтверждение.
+	// резолв номера может занять секунды — показываем статус, потом превращаем в подтверждение
 	searching, _ := c.Bot().Send(c.Recipient(), "🔎 Определяю номер телефона…")
 
 	req, err := h.callUC.HandleMessage(ctx, c.Sender().ID, c.Text())
@@ -234,7 +246,7 @@ func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) erro
 	return c.Send(text, kb, tele.ModeHTML)
 }
 
-// formatPhone форматирует 11-значный номер для показа: 79991234567 -> +7 (999) 123-45-67.
+// 79991234567 -> +7 (999) 123-45-67
 func formatPhone(d string) string {
 	if len(d) != 11 {
 		return d
@@ -242,7 +254,7 @@ func formatPhone(d string) string {
 	return fmt.Sprintf("+%s (%s) %s-%s-%s", d[0:1], d[1:4], d[4:7], d[7:9], d[9:11])
 }
 
-// normalizePhone приводит номер к 11 цифрам (8->7). ok=false, если не вышло.
+// приводит номер к 11 цифрам (8 -> 7); ok=false, если не получилось
 func normalizePhone(raw string) (string, bool) {
 	d := nonDigitRe.ReplaceAllString(raw, "")
 	switch {
