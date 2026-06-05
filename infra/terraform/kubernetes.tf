@@ -458,6 +458,24 @@ resource "kubernetes_deployment" "tg_bot" {
             value = "/secrets/ydb/sa-key.json"
           }
 
+          # api.telegram.org недоступен из Yandex Cloud (RU). Гоняем ТОЛЬКО
+          # трафик к Telegram через прокси на KZ-VM. NO_PROXY исключает YDB,
+          # caller-service и весь внутрикластерный трафик.
+          env {
+            name  = "HTTP_PROXY"
+            value = var.tg_proxy_url
+          }
+
+          env {
+            name  = "HTTPS_PROXY"
+            value = var.tg_proxy_url
+          }
+
+          env {
+            name  = "NO_PROXY"
+            value = ".yandex.net,.yandexcloud.net,ydb.serverless.yandexcloud.net,voice-agent-service,voice-agent-service.concierge,voice-agent-service.concierge.svc.cluster.local,.svc,.cluster.local,localhost,127.0.0.1,10.0.0.0/8,169.254.169.254"
+          }
+
           volume_mount {
             name       = "ydb-sa-key"
             mount_path = "/secrets/ydb"
@@ -586,8 +604,8 @@ resource "kubernetes_ingress_v1" "voice_agent_ingress" {
     namespace = kubernetes_namespace.concierge.metadata[0].name
     annotations = {
       "ingress.alb.yc.io/subnets" = join(",", [
-        yandex_vpc_subnet.concierge_subnet_a.id,
-        yandex_vpc_subnet.concierge_subnet_b.id
+        data.yandex_vpc_subnet.concierge_subnet_a.id,
+        data.yandex_vpc_subnet.concierge_subnet_b.id
       ])
       "ingress.alb.yc.io/group-name" = "concierge-ingress"
     }

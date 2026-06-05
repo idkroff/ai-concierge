@@ -96,7 +96,7 @@ variable "pjsip_endpoint" {
 variable "voice_agent_replicas" {
   description = "Number of voice-agent replicas"
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "asterisk_version" {
@@ -120,6 +120,13 @@ variable "tg_bot_version" {
   description = "Telegram bot container version in registry"
   type        = string
   default     = "1.1.1"
+}
+
+variable "tg_proxy_url" {
+  description = "HTTP(S) proxy URL для tg-bot для доступа к api.telegram.org (прокси на KZ-VM, т.к. Telegram заблокирован из Yandex Cloud RU)."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 variable "ydb_sa_key_json" {
