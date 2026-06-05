@@ -41,6 +41,8 @@ type parseResponse struct {
 	PhoneNumber  string `json:"phone_number"`
 	Organization string `json:"organization"`
 	Context      string `json:"context"`
+	DisplayName  string `json:"display_name"`
+	IsHotline    bool   `json:"is_hotline"`
 }
 
 type apiError struct {
@@ -83,6 +85,8 @@ func (c *Client) Parse(ctx context.Context, message string) (*entity.ParsedCall,
 		PhoneNumber:  pr.PhoneNumber,
 		Organization: pr.Organization,
 		Context:      pr.Context,
+		DisplayName:  pr.DisplayName,
+		IsHotline:    pr.IsHotline,
 	}, nil
 }
 

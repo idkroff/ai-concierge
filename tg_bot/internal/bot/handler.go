@@ -155,13 +155,19 @@ func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) erro
 	kb := &tele.ReplyMarkup{}
 	kb.Inline(kb.Row(btnConfirm, btnCancel))
 
-	var head string
+	var b strings.Builder
 	if req.Organization != "" {
-		head = fmt.Sprintf("📍 <b>%s</b>\n📞 <code>%s</code>", html.EscapeString(req.Organization), formatPhone(req.PhoneNumber))
-	} else {
-		head = fmt.Sprintf("📞 <code>%s</code>", formatPhone(req.PhoneNumber))
+		fmt.Fprintf(&b, "📍 <b>%s</b>\n", html.EscapeString(req.Organization))
 	}
-	text := head + fmt.Sprintf("\n\nЗапрос: <i>%s</i>\n\nПозвонить?", html.EscapeString(req.Context))
+	fmt.Fprintf(&b, "📞 <code>%s</code>", formatPhone(req.PhoneNumber))
+	if req.IsHotline {
+		b.WriteString(" ⚠️ <i>федеральная линия</i>")
+	}
+	if req.DisplayName != "" {
+		fmt.Fprintf(&b, "\nℹ️ %s", html.EscapeString(req.DisplayName))
+	}
+	fmt.Fprintf(&b, "\n\nЗапрос: <i>%s</i>\n\nПозвонить?", html.EscapeString(req.Context))
+	text := b.String()
 
 	if searching != nil {
 		_, err = c.Bot().Edit(searching, text, kb, tele.ModeHTML)

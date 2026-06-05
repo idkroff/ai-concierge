@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"concierge/internal/orgsearch"
 )
 
 const (
@@ -110,11 +112,13 @@ type Result struct {
 	PhoneNumber  string // 11 цифр без пробелов, например 79991234567
 	Context      string // цель звонка без номера
 	Organization string // заполняется, если номер найден по названию организации
+	DisplayName  string // описание найденной точки (название + адрес), если резолвили
+	IsHotline    bool   // номер похож на федеральную горячую линию (8-800)
 }
 
 // PhoneResolver находит телефон организации по её свободному названию.
 type PhoneResolver interface {
-	Resolve(ctx context.Context, query string) (phone, displayName string, err error)
+	Resolve(ctx context.Context, query string) (*orgsearch.Result, error)
 }
 
 type Parser struct {
@@ -224,14 +228,20 @@ func (p *Parser) Parse(ctx context.Context, message string) (*Result, error) {
 
 	// Номера нет — пробуем найти его по названию организации.
 	if rawOrg != "" && p.resolver != nil {
-		phone, _, err := p.resolver.Resolve(ctx, rawOrg)
+		res, err := p.resolver.Resolve(ctx, rawOrg)
 		if err != nil {
 			return nil, err
 		}
-		if len(phone) != 11 {
-			return nil, fmt.Errorf("резолвер вернул некорректный номер: %q", phone)
+		if res == nil || len(res.Phone) != 11 {
+			return nil, fmt.Errorf("резолвер вернул некорректный номер")
 		}
-		return &Result{PhoneNumber: phone, Context: rawCtx, Organization: rawOrg}, nil
+		return &Result{
+			PhoneNumber:  res.Phone,
+			Context:      rawCtx,
+			Organization: rawOrg,
+			DisplayName:  res.DisplayName,
+			IsHotline:    res.IsHotline,
+		}, nil
 	}
 
 	if rawPhone != "" {

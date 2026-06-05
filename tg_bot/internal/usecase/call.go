@@ -42,6 +42,8 @@ type ConfirmationRequest struct {
 	PhoneNumber  string // нормализованный 11-значный номер
 	Organization string // название организации, если номер найден по нему (иначе пусто)
 	Context      string // цель звонка
+	DisplayName  string // описание найденной точки (название + адрес)
+	IsHotline    bool   // номер похож на федеральную горячую линию (8-800)
 }
 
 type CallResult struct {
@@ -89,6 +91,8 @@ func (u *CallUsecase) HandleMessage(ctx context.Context, userID int64, message s
 		PhoneNumber:  parsed.PhoneNumber,
 		Organization: parsed.Organization,
 		Context:      parsed.Context,
+		DisplayName:  parsed.DisplayName,
+		IsHotline:    parsed.IsHotline,
 	}, nil
 }
 

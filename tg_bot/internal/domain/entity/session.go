@@ -23,4 +23,6 @@ type ParsedCall struct {
 	PhoneNumber  string
 	Organization string
 	Context      string
+	DisplayName  string // описание найденной точки (название + адрес), если резолвили по организации
+	IsHotline    bool   // номер похож на федеральную горячую линию (8-800)
 }

@@ -30,6 +30,8 @@ type parseResponse struct {
 	PhoneNumber  string `json:"phone_number"`
 	Organization string `json:"organization"`
 	Context      string `json:"context"`
+	DisplayName  string `json:"display_name"`
+	IsHotline    bool   `json:"is_hotline"`
 }
 
 func (h *ParseHandler) HandleParse(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +63,8 @@ func (h *ParseHandler) HandleParse(w http.ResponseWriter, r *http.Request) {
 		PhoneNumber:  parsed.PhoneNumber,
 		Organization: parsed.Organization,
 		Context:      parsed.Context,
+		DisplayName:  parsed.DisplayName,
+		IsHotline:    parsed.IsHotline,
 	})
 }
 
