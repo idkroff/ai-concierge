@@ -12,6 +12,7 @@ import (
 
 	"concierge/internal/handlers"
 	"concierge/internal/models"
+	"concierge/internal/orgsearch"
 	"concierge/internal/parser"
 	"concierge/internal/service"
 )
@@ -30,13 +31,16 @@ func main() {
 	}
 	defer callService.Close()
 
-	p := parser.New(config.APIKey, config.Folder)
+	resolver := orgsearch.New(config.APIKey, config.Folder, orgsearch.SitesFromEnv())
+	p := parser.New(config.APIKey, config.Folder, resolver)
 	callHandler := handlers.NewCallHandler(callService, p)
 	wsHandler := handlers.NewWSHandler(callService, p)
+	parseHandler := handlers.NewParseHandler(p)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/call/start", callHandler.HandleCallStart)
 	mux.HandleFunc("/ws", wsHandler.ServeWS)
+	mux.HandleFunc("/parse", parseHandler.HandleParse)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
