@@ -96,7 +96,7 @@ func (u *CallUsecase) HandleMessage(ctx context.Context, userID int64, message s
 	}, nil
 }
 
-func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64) (*CallResult, error) {
+func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64, callerName string) (*CallResult, error) {
 	session, err := u.sessions.Get(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
@@ -106,7 +106,13 @@ func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64) (*CallResul
 		return nil, fmt.Errorf("unexpected session state: %s", session.State)
 	}
 
-	callID, events, err := u.caller.StartCall(ctx, session.PendingPhone, session.PendingContext)
+	// Если у пользователя задано имя — звоним от его имени (подставляем в контекст агенту).
+	taskContext := session.PendingContext
+	if callerName != "" {
+		taskContext = fmt.Sprintf("Ты звонишь от имени человека по имени %s. %s", callerName, session.PendingContext)
+	}
+
+	callID, events, err := u.caller.StartCall(ctx, session.PendingPhone, taskContext)
 	if err != nil {
 		return nil, fmt.Errorf("start call: %w", err)
 	}
