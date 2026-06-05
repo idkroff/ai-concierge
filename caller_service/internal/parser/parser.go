@@ -10,38 +10,41 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"concierge/internal/orgsearch"
 )
 
 const (
 	yandexLLMURL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
 	systemPrompt = `<instructions>
-Извлеки из сообщения пользователя номер телефона и цель звонка.
+Извлеки из сообщения пользователя: номер телефона, цель звонка и (если телефон НЕ указан явно) название организации/места.
 
-Правила нормализации номера:
-- Верни ровно 11 цифр без пробелов, скобок, тире и других символов
-- Если номер начинается с 8 — замени первую цифру на 7
-- Если номер не найден — оставь phone_number пустым
+Правила:
+- Если в сообщении есть номер телефона — верни его в phone_number: ровно 11 цифр без пробелов, скобок и тире; если начинается с 8 — замени первую цифру на 7. organization оставь пустым.
+- Если телефона НЕТ, но указано название организации/заведения (возможно с уточнением района, улицы или города) — оставь phone_number пустым, а в organization положи это название вместе с уточнением местоположения, как написал пользователь.
+- В context всегда помещай цель звонка (без номера и без названия организации).
+- Если нет ни номера, ни названия организации — оставь phone_number и organization пустыми.
 
-Отвечай ТОЛЬКО тегами phone_number и context, без предисловий и пояснений.
+Отвечай ТОЛЬКО тегами phone_number, organization и context, без предисловий и пояснений.
 </instructions>
 
 <examples>
   <example>
     <input>Позвони по номеру +7 (495) 739-00-33 и забронируй столик на двоих</input>
-    <output><phone_number>74957390033</phone_number><context>забронируй столик на двоих</context></output>
+    <output><phone_number>74957390033</phone_number><organization></organization><context>забронируй столик на двоих</context></output>
+  </example>
+  <example>
+    <input>тануки на таганской забронируй столик на 19:00</input>
+    <output><phone_number></phone_number><organization>тануки на таганской</organization><context>забронируй столик на 19:00</context></output>
   </example>
   <example>
     <input>8 800 555 35 35 спроси есть ли в наличии аспирин</input>
-    <output><phone_number>78005553535</phone_number><context>спроси есть ли в наличии аспирин</context></output>
+    <output><phone_number>78005553535</phone_number><organization></organization><context>спроси есть ли в наличии аспирин</context></output>
   </example>
   <example>
-    <input>позвони 89161234567 и уточни время работы</input>
-    <output><phone_number>79161234567</phone_number><context>уточни время работы</context></output>
-  </example>
-  <example>
-    <input>узнай расписание поездов</input>
-    <output><phone_number></phone_number><context>узнай расписание поездов</context></output>
+    <input>позвони в пятёрочку на ленина и узнай часы работы</input>
+    <output><phone_number></phone_number><organization>пятёрочка на ленина</organization><context>узнай часы работы</context></output>
   </example>
 </examples>`
 )
@@ -52,22 +55,25 @@ var digitsOnly = regexp.MustCompile(`\D`)
 // иногда добавляет markdown ``` вокруг XML.
 type llmParsedFlexible struct {
 	PhoneDirect string `xml:"phone_number"`
+	OrgDirect   string `xml:"organization"`
 	CtxDirect   string `xml:"context"`
 	Output      struct {
 		Phone string `xml:"phone_number"`
+		Org   string `xml:"organization"`
 		Ctx   string `xml:"context"`
 	} `xml:"output"`
 }
 
-func (f llmParsedFlexible) phoneAndContext() (phone, ctx string) {
-	p, c := strings.TrimSpace(f.Output.Phone), strings.TrimSpace(f.Output.Ctx)
-	if p != "" || c != "" {
-		return p, c
+func (f llmParsedFlexible) fields() (phone, org, ctx string) {
+	p, o, c := strings.TrimSpace(f.Output.Phone), strings.TrimSpace(f.Output.Org), strings.TrimSpace(f.Output.Ctx)
+	if p != "" || o != "" || c != "" {
+		return p, o, c
 	}
-	return strings.TrimSpace(f.PhoneDirect), strings.TrimSpace(f.CtxDirect)
+	return strings.TrimSpace(f.PhoneDirect), strings.TrimSpace(f.OrgDirect), strings.TrimSpace(f.CtxDirect)
 }
 
 var rePhoneTag = regexp.MustCompile(`(?i)<phone_number>\s*([^<]*?)\s*</phone_number>`)
+var reOrgTag = regexp.MustCompile(`(?i)<organization>\s*([^<]*?)\s*</organization>`)
 var reCtxTag = regexp.MustCompile(`(?i)<context>\s*([^<]*?)\s*</context>`)
 
 func stripMarkdownFences(s string) string {
@@ -89,31 +95,44 @@ func stripMarkdownFences(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func extractTagsFallback(s string) (phone, ctx string) {
+func extractTagsFallback(s string) (phone, org, ctx string) {
 	if m := rePhoneTag.FindStringSubmatch(s); len(m) > 1 {
 		phone = strings.TrimSpace(m[1])
+	}
+	if m := reOrgTag.FindStringSubmatch(s); len(m) > 1 {
+		org = strings.TrimSpace(m[1])
 	}
 	if m := reCtxTag.FindStringSubmatch(s); len(m) > 1 {
 		ctx = strings.TrimSpace(m[1])
 	}
-	return phone, ctx
+	return phone, org, ctx
 }
 
 type Result struct {
-	PhoneNumber string // 11 цифр без пробелов, например 79991234567
-	Context     string // цель звонка без номера
+	PhoneNumber  string // 11 цифр без пробелов, например 79991234567
+	Context      string // цель звонка без номера
+	Organization string // заполняется, если номер найден по названию организации
+	DisplayName  string // описание найденной точки (название + адрес), если резолвили
+	IsHotline    bool   // номер похож на федеральную горячую линию (8-800)
+}
+
+// PhoneResolver находит телефон организации по её свободному названию.
+type PhoneResolver interface {
+	Resolve(ctx context.Context, query string) (*orgsearch.Result, error)
 }
 
 type Parser struct {
 	apiKey   string
 	folderID string
+	resolver PhoneResolver
 	client   *http.Client
 }
 
-func New(apiKey, folderID string) *Parser {
+func New(apiKey, folderID string, resolver PhoneResolver) *Parser {
 	return &Parser{
 		apiKey:   apiKey,
 		folderID: folderID,
+		resolver: resolver,
 		client: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -193,24 +212,40 @@ func (p *Parser) Parse(ctx context.Context, message string) (*Result, error) {
 	rawText := stripMarkdownFences(llmResp.Result.Alternatives[0].Message.Text)
 
 	var flex llmParsedFlexible
-	rawPhone, rawCtx := "", ""
+	rawPhone, rawOrg, rawCtx := "", "", ""
 	if err := xml.Unmarshal([]byte("<root>"+rawText+"</root>"), &flex); err == nil {
-		rawPhone, rawCtx = flex.phoneAndContext()
+		rawPhone, rawOrg, rawCtx = flex.fields()
 	}
-	if rawPhone == "" {
-		rawPhone, rawCtx = extractTagsFallback(rawText)
-	}
-	if rawPhone == "" {
-		return nil, fmt.Errorf("не удалось извлечь номер телефона из сообщения")
+	if rawPhone == "" && rawOrg == "" {
+		rawPhone, rawOrg, rawCtx = extractTagsFallback(rawText)
 	}
 
+	// Явно указанный номер имеет приоритет.
 	digits := digitsOnly.ReplaceAllString(rawPhone, "")
-	if len(digits) != 11 {
+	if len(digits) == 11 {
+		return &Result{PhoneNumber: digits, Context: rawCtx}, nil
+	}
+
+	// Номера нет — пробуем найти его по названию организации.
+	if rawOrg != "" && p.resolver != nil {
+		res, err := p.resolver.Resolve(ctx, rawOrg)
+		if err != nil {
+			return nil, err
+		}
+		if res == nil || len(res.Phone) != 11 {
+			return nil, fmt.Errorf("резолвер вернул некорректный номер")
+		}
+		return &Result{
+			PhoneNumber:  res.Phone,
+			Context:      rawCtx,
+			Organization: rawOrg,
+			DisplayName:  res.DisplayName,
+			IsHotline:    res.IsHotline,
+		}, nil
+	}
+
+	if rawPhone != "" {
 		return nil, fmt.Errorf("извлечённый номер имеет неверный формат: %q", rawPhone)
 	}
-
-	return &Result{
-		PhoneNumber: digits,
-		Context:     rawCtx,
-	}, nil
+	return nil, fmt.Errorf("не удалось определить номер телефона или организацию из сообщения")
 }

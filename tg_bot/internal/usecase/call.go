@@ -10,7 +10,8 @@ import (
 )
 
 type CallerClient interface {
-	StartCall(ctx context.Context, message string) (callID string, events <-chan entity.CallEvent, err error)
+	Parse(ctx context.Context, text string) (*entity.ParsedCall, error)
+	StartCall(ctx context.Context, phoneNumber, text string) (callID string, events <-chan entity.CallEvent, err error)
 }
 
 type TranscriptRole string
@@ -38,7 +39,11 @@ type CallUpdate struct {
 }
 
 type ConfirmationRequest struct {
-	Message string
+	PhoneNumber  string // нормализованный 11-значный номер
+	Organization string // название организации, если номер найден по нему (иначе пусто)
+	Context      string // цель звонка
+	DisplayName  string // описание найденной точки (название + адрес)
+	IsHotline    bool   // номер похож на федеральную горячую линию (8-800)
 }
 
 type CallResult struct {
@@ -67,14 +72,28 @@ func (u *CallUsecase) HandleMessage(ctx context.Context, userID int64, message s
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 
+	parsed, err := u.caller.Parse(ctx, message)
+	if err != nil {
+		return nil, fmt.Errorf("parse message: %w", err)
+	}
+
 	session.State = entity.StateAwaitingConfirmation
 	session.PendingMessage = message
+	session.PendingPhone = parsed.PhoneNumber
+	session.PendingContext = parsed.Context
+	session.Organization = parsed.Organization
 
 	if err := u.sessions.Save(ctx, session); err != nil {
 		return nil, fmt.Errorf("save session: %w", err)
 	}
 
-	return &ConfirmationRequest{Message: message}, nil
+	return &ConfirmationRequest{
+		PhoneNumber:  parsed.PhoneNumber,
+		Organization: parsed.Organization,
+		Context:      parsed.Context,
+		DisplayName:  parsed.DisplayName,
+		IsHotline:    parsed.IsHotline,
+	}, nil
 }
 
 func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64) (*CallResult, error) {
@@ -87,13 +106,16 @@ func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64) (*CallResul
 		return nil, fmt.Errorf("unexpected session state: %s", session.State)
 	}
 
-	callID, events, err := u.caller.StartCall(ctx, session.PendingMessage)
+	callID, events, err := u.caller.StartCall(ctx, session.PendingPhone, session.PendingContext)
 	if err != nil {
 		return nil, fmt.Errorf("start call: %w", err)
 	}
 
 	session.State = entity.StateIdle
 	session.PendingMessage = ""
+	session.PendingPhone = ""
+	session.PendingContext = ""
+	session.Organization = ""
 	if err := u.sessions.Save(ctx, session); err != nil {
 		return nil, fmt.Errorf("save session: %w", err)
 	}
@@ -109,6 +131,9 @@ func (u *CallUsecase) CancelCall(ctx context.Context, userID int64) error {
 
 	session.State = entity.StateIdle
 	session.PendingMessage = ""
+	session.PendingPhone = ""
+	session.PendingContext = ""
+	session.Organization = ""
 
 	if err := u.sessions.Save(ctx, session); err != nil {
 		return fmt.Errorf("save session: %w", err)

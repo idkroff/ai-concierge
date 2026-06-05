@@ -1,10 +1,13 @@
 package caller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"strings"
 	"time"
 
 	"tg_bot/internal/domain/entity"
@@ -13,16 +16,84 @@ import (
 )
 
 type Client struct {
-	wsURL string
+	wsURL    string
+	httpBase string
+	http     *http.Client
 }
 
 func NewClient(baseURL string) *Client {
-	return &Client{wsURL: baseURL + "/ws"}
+	httpBase := baseURL
+	if strings.HasPrefix(baseURL, "ws") { // ws:// -> http://, wss:// -> https://
+		httpBase = "http" + strings.TrimPrefix(baseURL, "ws")
+	}
+	return &Client{
+		wsURL:    baseURL + "/ws",
+		httpBase: httpBase,
+		http:     &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+type parseRequest struct {
+	Text string `json:"text"`
+}
+
+type parseResponse struct {
+	PhoneNumber  string `json:"phone_number"`
+	Organization string `json:"organization"`
+	Context      string `json:"context"`
+	DisplayName  string `json:"display_name"`
+	IsHotline    bool   `json:"is_hotline"`
+}
+
+type apiError struct {
+	Error string `json:"error"`
+}
+
+// Parse — preview: разбирает сообщение (и резолвит телефон по названию организации)
+// через HTTP /parse caller-сервиса, БЕЗ старта звонка.
+func (c *Client) Parse(ctx context.Context, message string) (*entity.ParsedCall, error) {
+	body, err := json.Marshal(parseRequest{Text: message})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.httpBase+"/parse", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("parse request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var ae apiError
+		_ = json.NewDecoder(resp.Body).Decode(&ae)
+		if ae.Error != "" {
+			return nil, fmt.Errorf("%s", ae.Error)
+		}
+		return nil, fmt.Errorf("parse status %d", resp.StatusCode)
+	}
+
+	var pr parseResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return nil, fmt.Errorf("decode parse response: %w", err)
+	}
+	return &entity.ParsedCall{
+		PhoneNumber:  pr.PhoneNumber,
+		Organization: pr.Organization,
+		Context:      pr.Context,
+		DisplayName:  pr.DisplayName,
+		IsHotline:    pr.IsHotline,
+	}, nil
 }
 
 type startCallMsg struct {
-	Action string `json:"action"`
-	Text   string `json:"text"`
+	Action      string `json:"action"`
+	PhoneNumber string `json:"phone_number"`
+	Text        string `json:"text"`
 }
 
 type wsEvent struct {
@@ -35,7 +106,7 @@ type errorPayload struct {
 	Message string `json:"message"`
 }
 
-func (c *Client) StartCall(ctx context.Context, message string) (string, <-chan entity.CallEvent, error) {
+func (c *Client) StartCall(ctx context.Context, phoneNumber, text string) (string, <-chan entity.CallEvent, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.wsURL, nil)
 	if err != nil {
 		return "", nil, fmt.Errorf("ws dial: %w", err)
@@ -47,8 +118,8 @@ func (c *Client) StartCall(ctx context.Context, message string) (string, <-chan 
 		return "", nil, fmt.Errorf("ws read connected: %w", err)
 	}
 
-	// Отправляем команду
-	if err := conn.WriteJSON(startCallMsg{Action: "start_call", Text: message}); err != nil {
+	// Отправляем команду с уже найденным номером (caller-сервис не парсит повторно)
+	if err := conn.WriteJSON(startCallMsg{Action: "start_call", PhoneNumber: phoneNumber, Text: text}); err != nil {
 		conn.Close()
 		return "", nil, fmt.Errorf("ws write: %w", err)
 	}

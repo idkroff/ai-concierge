@@ -23,9 +23,9 @@ const (
 
 	maxMessageLen = 3800
 
-	welcomeText     = "Я ИИ-консьерж — могу позвонить по вашим рутинным задачам за вас.\n\nПросто напишите, кому и зачем нужно позвонить, например:\n<i>7 995 123 45-67 забронируй столик у окна на 19:00</i>"
-	phoneOfferText  = "\n\nКстати, вы можете оставить свой номер телефона, чтобы мы могли связаться с вами по вашим задачам. Для этого нажмите кнопку ниже."
-	phoneSavedText  = "\n\n✅ Ваш номер телефона сохранён."
+	welcomeText    = "Я ИИ-консьерж — могу позвонить по вашим рутинным задачам за вас.\n\nПросто напишите, кому и зачем нужно позвонить, например:\n<i>7 995 123 45-67 забронируй столик у окна на 19:00</i>"
+	phoneOfferText = "\n\nКстати, вы можете оставить свой номер телефона, чтобы мы могли связаться с вами по вашим задачам. Для этого нажмите кнопку ниже."
+	phoneSavedText = "\n\n✅ Ваш номер телефона сохранён."
 )
 
 type Handler struct {
@@ -137,17 +137,51 @@ func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) erro
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
 
+	// Резолв номера (особенно по названию организации) может занять несколько секунд —
+	// показываем промежуточный статус, который потом превращаем в подтверждение.
+	searching, _ := c.Bot().Send(c.Recipient(), "🔎 Определяю номер телефона…")
+
 	req, err := h.callUC.HandleMessage(ctx, c.Sender().ID, c.Text())
 	if err != nil {
 		log.Printf("HandleMessage error: %v", err)
-		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
+		msg := "Не получилось определить номер телефона. Укажите номер явно или уточните название организации, например:\n<i>тануки на таганской забронируй столик на 19:00</i>"
+		if searching != nil {
+			_, _ = c.Bot().Edit(searching, msg, tele.ModeHTML)
+			return nil
+		}
+		return c.Send(msg, tele.ModeHTML)
 	}
 
 	kb := &tele.ReplyMarkup{}
 	kb.Inline(kb.Row(btnConfirm, btnCancel))
 
-	text := fmt.Sprintf("Хотите совершить звонок с запросом:\n\n<i>%s</i>", req.Message)
+	var b strings.Builder
+	if req.Organization != "" {
+		fmt.Fprintf(&b, "📍 <b>%s</b>\n", html.EscapeString(req.Organization))
+	}
+	fmt.Fprintf(&b, "📞 <code>%s</code>", formatPhone(req.PhoneNumber))
+	if req.IsHotline {
+		b.WriteString(" ⚠️ <i>федеральная линия</i>")
+	}
+	if req.DisplayName != "" {
+		fmt.Fprintf(&b, "\nℹ️ %s", html.EscapeString(req.DisplayName))
+	}
+	fmt.Fprintf(&b, "\n\nЗапрос: <i>%s</i>\n\nПозвонить?", html.EscapeString(req.Context))
+	text := b.String()
+
+	if searching != nil {
+		_, err = c.Bot().Edit(searching, text, kb, tele.ModeHTML)
+		return err
+	}
 	return c.Send(text, kb, tele.ModeHTML)
+}
+
+// formatPhone форматирует 11-значный номер для показа: 79991234567 -> +7 (999) 123-45-67.
+func formatPhone(d string) string {
+	if len(d) != 11 {
+		return d
+	}
+	return fmt.Sprintf("+%s (%s) %s-%s-%s", d[0:1], d[1:4], d[4:7], d[7:9], d[9:11])
 }
 
 func (h *Handler) onConfirm(c tele.Context) error {
