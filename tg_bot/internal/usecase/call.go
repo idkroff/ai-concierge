@@ -39,11 +39,11 @@ type CallUpdate struct {
 }
 
 type ConfirmationRequest struct {
-	PhoneNumber  string // нормализованный 11-значный номер
-	Organization string // название организации, если номер найден по нему (иначе пусто)
-	Context      string // цель звонка
-	DisplayName  string // описание найденной точки (название + адрес)
-	IsHotline    bool   // номер похож на федеральную горячую линию (8-800)
+	PhoneNumber  string
+	Organization string
+	Context      string
+	DisplayName  string
+	IsHotline    bool
 }
 
 type CallResult struct {
@@ -96,7 +96,7 @@ func (u *CallUsecase) HandleMessage(ctx context.Context, userID int64, message s
 	}, nil
 }
 
-func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64) (*CallResult, error) {
+func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64, callerName string) (*CallResult, error) {
 	session, err := u.sessions.Get(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
@@ -106,7 +106,13 @@ func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64) (*CallResul
 		return nil, fmt.Errorf("unexpected session state: %s", session.State)
 	}
 
-	callID, events, err := u.caller.StartCall(ctx, session.PendingPhone, session.PendingContext)
+	// агент — ассистент клиента; имя называет только если спросят напрямую
+	taskContext := session.PendingContext
+	if callerName != "" {
+		taskContext = fmt.Sprintf("%s\n\nВажно: ты — ассистент и звонишь по поручению клиента, не представляйся его именем и не называйся им. Имя клиента — %s; называй его только если собеседник прямо спросит (например, на чьё имя оформить или забронировать).", session.PendingContext, callerName)
+	}
+
+	callID, events, err := u.caller.StartCall(ctx, session.PendingPhone, taskContext)
 	if err != nil {
 		return nil, fmt.Errorf("start call: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,10 +24,19 @@ const (
 
 	maxMessageLen = 3800
 
-	welcomeText    = "Я ИИ-консьерж — могу позвонить по вашим рутинным задачам за вас.\n\nПросто напишите, кому и зачем нужно позвонить, например:\n<i>7 995 123 45-67 забронируй столик у окна на 19:00</i>"
-	phoneOfferText = "\n\nКстати, вы можете оставить свой номер телефона, чтобы мы могли связаться с вами по вашим задачам. Для этого нажмите кнопку ниже."
-	phoneSavedText = "\n\n✅ Ваш номер телефона сохранён."
+	dailyCallLimit = 3
+
+	askPhoneText = "Привет! Я ИИ-консьерж — звоню по вашим рутинным задачам за вас.\n\nЧтобы начать, поделитесь своим номером телефона — нажмите кнопку ниже."
+	readyText    = "Готов звонить 🙌\n\nНапишите, кому и зачем нужно позвонить, например:\n<i>тануки на таганской забронируй столик на 19:00</i>\nили\n<i>+7 495 739-00-33 узнай часы работы</i>\n\nИмя, от которого я звоню, можно задать командой /name."
+	limitText    = "Достигнут дневной лимит звонков (3). Попробуйте завтра 🌙"
 )
+
+var nonDigitRe = regexp.MustCompile(`\D`)
+
+// номера (11 цифр) с доступом к /droplimits
+var droplimitsWhitelist = map[string]bool{
+	"79914043003": true,
+}
 
 type Handler struct {
 	callUC    *usecase.CallUsecase
@@ -44,6 +54,9 @@ func (h *Handler) Register(b *tele.Bot) {
 	btnCancel := tele.Btn{Text: "❌ Отмена", Unique: callbackCancel}
 
 	b.Handle("/start", h.onStart)
+	b.Handle("/help", h.onHelp)
+	b.Handle("/name", h.onName)
+	b.Handle("/droplimits", h.onDropLimits)
 	b.Handle(tele.OnContact, h.onContact)
 
 	b.Handle(tele.OnText, func(c tele.Context) error {
@@ -52,6 +65,37 @@ func (h *Handler) Register(b *tele.Bot) {
 
 	b.Handle(&btnConfirm, h.onConfirm)
 	b.Handle(&btnCancel, h.onCancel)
+
+	// /droplimits намеренно не публикуем — админская
+	if err := b.SetCommands([]tele.Command{
+		{Text: "start", Description: "Запуск и краткая справка"},
+		{Text: "help", Description: "Помощь"},
+		{Text: "name", Description: "Имя, от которого я звоню"},
+	}); err != nil {
+		log.Printf("SetCommands error: %v", err)
+	}
+}
+
+// возвращает false и просит поделиться номером, если пользователь не зарегистрирован
+func (h *Handler) requirePhone(ctx context.Context, c tele.Context) (entity.User, bool) {
+	user, err := h.userUC.EnsureUser(ctx, c.Sender().ID)
+	if err != nil {
+		log.Printf("EnsureUser error: %v", err)
+		_ = c.Send("Произошла ошибка. Попробуйте ещё раз.")
+		return entity.User{}, false
+	}
+	if user.Phone == "" {
+		_ = h.askPhone(c)
+		return entity.User{}, false
+	}
+	return user, true
+}
+
+func (h *Handler) askPhone(c tele.Context) error {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true, OneTimeKeyboard: true}
+	btnPhone := menu.Contact("📱 Поделиться номером телефона")
+	menu.Reply(menu.Row(btnPhone))
+	return c.Send(askPhoneText, menu, tele.ModeHTML)
 }
 
 func (h *Handler) onStart(c tele.Context) error {
@@ -64,11 +108,14 @@ func (h *Handler) onStart(c tele.Context) error {
 		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
 	}
 
-	if user.Name != "" {
-		return h.sendWelcome(c, user, fmt.Sprintf("С возвращением, %s! ", html.EscapeString(user.Name)))
+	if user.Phone == "" {
+		return h.askPhone(c)
 	}
+	return c.Send(readyText, tele.ModeHTML)
+}
 
-	return c.Send("Привет! Как вас представлять?")
+func (h *Handler) onHelp(c tele.Context) error {
+	return c.Send(readyText, tele.ModeHTML)
 }
 
 func (h *Handler) onContact(c tele.Context) error {
@@ -79,57 +126,75 @@ func (h *Handler) onContact(c tele.Context) error {
 	if contact == nil {
 		return nil
 	}
-
 	if contact.UserID != c.Sender().ID {
 		return c.Send("Пожалуйста, поделитесь своим номером телефона, а не чужим контактом.")
 	}
 
-	if err := h.userUC.SavePhone(ctx, c.Sender().ID, contact.PhoneNumber); err != nil {
+	phone, ok := normalizePhone(contact.PhoneNumber)
+	if !ok {
+		return c.Send("Не удалось распознать номер. Попробуйте ещё раз через кнопку ниже.")
+	}
+	if err := h.userUC.SavePhone(ctx, c.Sender().ID, phone); err != nil {
 		log.Printf("SavePhone error: %v", err)
 		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
 	}
 
 	rm := &tele.ReplyMarkup{RemoveKeyboard: true}
-	return c.Send("Спасибо, ваш номер телефона сохранён!", rm)
+	return c.Send("✅ Номер сохранён.\n\n"+readyText, rm, tele.ModeHTML)
 }
 
-func (h *Handler) sendWelcome(c tele.Context, user entity.User, greeting string) error {
-	text := greeting + welcomeText
-	if user.Phone != "" {
-		text += phoneSavedText
-		return c.Send(text, tele.ModeHTML)
+func (h *Handler) onName(c tele.Context) error {
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	user, ok := h.requirePhone(ctx, c)
+	if !ok {
+		return nil
 	}
 
-	text += phoneOfferText
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true, OneTimeKeyboard: true}
-	btnPhone := menu.Contact("📱 Поделиться номером телефона")
-	menu.Reply(menu.Row(btnPhone))
-	return c.Send(text, menu, tele.ModeHTML)
+	name := strings.TrimSpace(c.Message().Payload)
+	if name == "" {
+		if user.Name != "" {
+			return c.Send(fmt.Sprintf("Сейчас я звоню от имени: <b>%s</b>.\nЧтобы изменить — пришлите: <code>/name Иван</code>", html.EscapeString(user.Name)), tele.ModeHTML)
+		}
+		return c.Send("Укажите имя так: <code>/name Иван</code>.\nЯ буду представляться им в звонках от вашего имени.", tele.ModeHTML)
+	}
+	if err := h.userUC.SaveName(ctx, c.Sender().ID, name); err != nil {
+		log.Printf("SaveName error: %v", err)
+		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
+	}
+	return c.Send(fmt.Sprintf("✅ Имя сохранено: <b>%s</b>", html.EscapeString(name)), tele.ModeHTML)
+}
+
+// /droplimits — сброс своего дневного счётчика; только для droplimitsWhitelist
+func (h *Handler) onDropLimits(c tele.Context) error {
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	user, ok := h.requirePhone(ctx, c)
+	if !ok {
+		return nil
+	}
+
+	phone, _ := normalizePhone(user.Phone)
+	if !droplimitsWhitelist[phone] {
+		return c.Send("Команда недоступна.")
+	}
+
+	if err := h.usedCalls.Reset(ctx, c.Sender().ID); err != nil {
+		log.Printf("Reset limits error: %v", err)
+		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
+	}
+	return c.Send("✅ Дневной лимит сброшен.")
 }
 
 func (h *Handler) onText(c tele.Context, btnConfirm, btnCancel tele.Btn) error {
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
 
-	user, err := h.userUC.EnsureUser(ctx, c.Sender().ID)
-	if err != nil {
-		log.Printf("EnsureUser error: %v", err)
-		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
+	if _, ok := h.requirePhone(ctx, c); !ok {
+		return nil
 	}
-
-	if user.Name == "" {
-		name := strings.TrimSpace(c.Text())
-		if name == "" {
-			return c.Send("Имя не может быть пустым. Как вас представлять?")
-		}
-		if err := h.userUC.SaveName(ctx, c.Sender().ID, name); err != nil {
-			log.Printf("SaveName error: %v", err)
-			return c.Send("Произошла ошибка. Попробуйте ещё раз.")
-		}
-		user.Name = name
-		return h.sendWelcome(c, user, fmt.Sprintf("Приятно познакомиться, %s! ", html.EscapeString(name)))
-	}
-
 	return h.onMessage(c, btnConfirm, btnCancel)
 }
 
@@ -137,8 +202,13 @@ func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) erro
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
 
-	// Резолв номера (особенно по названию организации) может занять несколько секунд —
-	// показываем промежуточный статус, который потом превращаем в подтверждение.
+	if cnt, err := h.usedCalls.GetTodayCount(ctx, c.Sender().ID); err != nil {
+		log.Printf("GetTodayCount error: %v", err)
+	} else if cnt >= dailyCallLimit {
+		return c.Send(limitText)
+	}
+
+	// резолв номера может занять секунды — показываем статус, потом превращаем в подтверждение
 	searching, _ := c.Bot().Send(c.Recipient(), "🔎 Определяю номер телефона…")
 
 	req, err := h.callUC.HandleMessage(ctx, c.Sender().ID, c.Text())
@@ -176,7 +246,7 @@ func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) erro
 	return c.Send(text, kb, tele.ModeHTML)
 }
 
-// formatPhone форматирует 11-значный номер для показа: 79991234567 -> +7 (999) 123-45-67.
+// 79991234567 -> +7 (999) 123-45-67
 func formatPhone(d string) string {
 	if len(d) != 11 {
 		return d
@@ -184,11 +254,40 @@ func formatPhone(d string) string {
 	return fmt.Sprintf("+%s (%s) %s-%s-%s", d[0:1], d[1:4], d[4:7], d[7:9], d[9:11])
 }
 
+// приводит номер к 11 цифрам (8 -> 7); ok=false, если не получилось
+func normalizePhone(raw string) (string, bool) {
+	d := nonDigitRe.ReplaceAllString(raw, "")
+	switch {
+	case len(d) == 11 && d[0] == '8':
+		d = "7" + d[1:]
+	case len(d) == 10:
+		d = "7" + d
+	}
+	if len(d) != 11 {
+		return "", false
+	}
+	return d, true
+}
+
 func (h *Handler) onConfirm(c tele.Context) error {
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
 
-	result, err := h.callUC.ConfirmCall(ctx, c.Sender().ID)
+	if cnt, err := h.usedCalls.GetTodayCount(ctx, c.Sender().ID); err != nil {
+		log.Printf("GetTodayCount error: %v", err)
+	} else if cnt >= dailyCallLimit {
+		_ = c.Edit(limitText)
+		return nil
+	}
+
+	user, err := h.userUC.EnsureUser(ctx, c.Sender().ID)
+	if err != nil {
+		log.Printf("EnsureUser error: %v", err)
+		_ = c.Edit("Произошла ошибка. Попробуйте ещё раз.")
+		return nil
+	}
+
+	result, err := h.callUC.ConfirmCall(ctx, c.Sender().ID, user.Name)
 	if err != nil {
 		log.Printf("ConfirmCall error: %v", err)
 		_ = c.Edit("Не удалось инициировать звонок: " + err.Error())

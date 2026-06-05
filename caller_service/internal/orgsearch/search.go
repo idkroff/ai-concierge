@@ -17,16 +17,16 @@ import (
 
 const genSearchURL = "https://searchapi.api.cloud.yandex.net/v2/gen/search"
 
+// Search API v2 лимитирует genSearchRequestsPerSecond = 1 — при 429/5xx/пустом
+// ответе делаем ограниченный ретрай с паузой.
 const (
 	maxAttempts  = 3
 	retryBackoff = 1500 * time.Millisecond
 )
 
-// defaultSites — источники, в которых обычно есть телефоны организаций.
 var defaultSites = []string{"yandex.ru", "2gis.ru", "zoon.ru", "orgpage.ru", "spr.ru"}
 
-// SitesFromEnv читает список сайтов-источников из ORG_SEARCH_SITES
-// (через запятую) либо возвращает defaultSites.
+// SitesFromEnv: список источников из ORG_SEARCH_SITES (через запятую) либо defaultSites.
 func SitesFromEnv() []string {
 	raw := strings.TrimSpace(os.Getenv("ORG_SEARCH_SITES"))
 	if raw == "" {
@@ -44,14 +44,12 @@ func SitesFromEnv() []string {
 	return sites
 }
 
-// Result — итог резолва организации.
 type Result struct {
-	Phone       string // 11 цифр, например 74956769922
-	DisplayName string // краткое описание точки из ответа (название + адрес), без телефона
-	IsHotline   bool   // номер похож на федеральную горячую линию (8-800)
+	Phone       string
+	DisplayName string
+	IsHotline   bool
 }
 
-// Resolver обращается к Search API v2 тем же Api-Key, что и остальной сервис.
 type Resolver struct {
 	apiKey   string
 	folderID string
@@ -87,7 +85,7 @@ type genMessage struct {
 	Role    string `json:"role"`
 }
 
-// genChunk — элемент массива-ответа Search API v2 (стрим кумулятивных чанков).
+// элемент массива-ответа Search API v2 (стрим кумулятивных чанков)
 type genChunk struct {
 	Message struct {
 		Content string `json:"content"`
@@ -101,8 +99,6 @@ var (
 	reCite   = regexp.MustCompile(`\[\d+\]`)
 )
 
-// Resolve возвращает нормализованный 11-значный телефон и краткое описание точки
-// для названия организации query.
 func (r *Resolver) Resolve(ctx context.Context, query string) (*Result, error) {
 	answer, err := r.search(ctx, query+" телефон")
 	if err != nil {
@@ -120,10 +116,9 @@ func (r *Resolver) Resolve(ctx context.Context, query string) (*Result, error) {
 	}, nil
 }
 
-// search делает запрос к Search API с ретраями и возвращает текст лучшего чанка.
 func (r *Resolver) search(ctx context.Context, query string) (string, error) {
 	var lastErr error
-	for attempt := range maxAttempts {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
@@ -186,9 +181,8 @@ func (r *Resolver) doSearch(ctx context.Context, query string) (content string, 
 	return bestContent(raw), resp.StatusCode, nil
 }
 
-// bestContent устойчиво разбирает ответ: массив чанков (часть элементов может быть
-// строкой, а не объектом — такие пропускаем) либо одиночный объект; берёт самый
-// длинный message.content
+// bestContent берёт самый длинный message.content. Элемент массива иногда приходит
+// строкой, а не объектом — такие пропускаем.
 func bestContent(raw []byte) string {
 	var arr []json.RawMessage
 	if err := json.Unmarshal(raw, &arr); err == nil {
@@ -196,7 +190,7 @@ func bestContent(raw []byte) string {
 		for _, el := range arr {
 			var c genChunk
 			if json.Unmarshal(el, &c) != nil {
-				continue // не объект (например, строка) — пропускаем
+				continue
 			}
 			if len(c.Message.Content) > len(best) {
 				best = c.Message.Content
@@ -211,7 +205,7 @@ func bestContent(raw []byte) string {
 	return ""
 }
 
-// normalize приводит найденный телефон к 11 цифрам (8->7, 10-значный -> +7).
+// 8->7, 10 цифр -> +7; "" если не 11 цифр
 func normalize(match string) string {
 	if match == "" {
 		return ""
@@ -233,6 +227,7 @@ func isHotline(phone string) bool {
 	return len(phone) == 11 && strings.HasPrefix(phone, "7800")
 }
 
+// describe: краткое описание точки из ответа без телефона, markdown и сносок [N].
 func describe(answer, phoneMatch string) string {
 	s := answer
 	if phoneMatch != "" {
