@@ -12,17 +12,8 @@ terraform {
     }
   }
 
-  backend "s3" {
-    endpoint   = "https://storage.yandexcloud.net"
-    bucket     = "concierge-terraform-state"
-    region     = "ru-central1"
-    key        = "state.tfstate"
-
-    skip_region_validation      = true
-    skip_credentials_validation  = true
-    skip_requesting_account_id  = true
-    skip_s3_checksum             = true
-  }
+  # Local state backend (remote s3 bucket concierge-terraform-state no longer exists).
+  # State is stored locally in infra/terraform/terraform.tfstate.
 }
 
 provider "yandex" {
@@ -32,31 +23,23 @@ provider "yandex" {
   zone      = var.yandex_zone
 }
 
-# Создание VPC сети
-resource "yandex_vpc_network" "concierge_network" {
-  name = "concierge-network"
+# Переиспользуем существующую default-сеть в фолдере concierge.
+# Квота vpc.networks.count в облаке исчерпана, поэтому новую сеть не создаём,
+# а ссылаемся на уже существующую сеть и её default-подсети через data-источники.
+data "yandex_vpc_network" "concierge_network" {
+  network_id = "enpqm983aks24igqrde3"
 }
 
-# Создание подсетей в разных зонах
-resource "yandex_vpc_subnet" "concierge_subnet_a" {
-  name           = "concierge-subnet-a"
-  zone           = "ru-central1-a"
-  network_id     = yandex_vpc_network.concierge_network.id
-  v4_cidr_blocks = ["10.1.0.0/24"]
+data "yandex_vpc_subnet" "concierge_subnet_a" {
+  subnet_id = "e9bhdnn5ph9v7p786j8i" # default-ru-central1-a (10.128.0.0/24)
 }
 
-resource "yandex_vpc_subnet" "concierge_subnet_b" {
-  name           = "concierge-subnet-b"
-  zone           = "ru-central1-b"
-  network_id     = yandex_vpc_network.concierge_network.id
-  v4_cidr_blocks = ["10.1.1.0/24"]
+data "yandex_vpc_subnet" "concierge_subnet_b" {
+  subnet_id = "e2l0b3fdektfhrpbo3vg" # default-ru-central1-b (10.129.0.0/24)
 }
 
-resource "yandex_vpc_subnet" "concierge_subnet_c" {
-  name           = "concierge-subnet-c"
-  zone           = "ru-central1-d"
-  network_id     = yandex_vpc_network.concierge_network.id
-  v4_cidr_blocks = ["10.1.2.0/24"]
+data "yandex_vpc_subnet" "concierge_subnet_c" {
+  subnet_id = "fl89248rqlultv9sc5j2" # default-ru-central1-d (10.130.0.0/24)
 }
 
 # Сервисный аккаунт для Kubernetes кластера
@@ -95,12 +78,12 @@ resource "yandex_kubernetes_cluster" "concierge_cluster" {
   name        = "concierge-cluster"
   description = "Kubernetes cluster for AI Concierge"
 
-  network_id = yandex_vpc_network.concierge_network.id
+  network_id = data.yandex_vpc_network.concierge_network.id
 
   master {
     zonal {
-      zone      = yandex_vpc_subnet.concierge_subnet_a.zone
-      subnet_id = yandex_vpc_subnet.concierge_subnet_a.id
+      zone      = data.yandex_vpc_subnet.concierge_subnet_a.zone
+      subnet_id = data.yandex_vpc_subnet.concierge_subnet_a.id
     }
 
     public_ip = true
@@ -150,8 +133,8 @@ resource "yandex_kubernetes_node_group" "concierge_nodes" {
     network_interface {
       nat        = true
       subnet_ids = [
-        yandex_vpc_subnet.concierge_subnet_a.id,
-        yandex_vpc_subnet.concierge_subnet_b.id
+        data.yandex_vpc_subnet.concierge_subnet_a.id,
+        data.yandex_vpc_subnet.concierge_subnet_b.id
       ]
     }
 

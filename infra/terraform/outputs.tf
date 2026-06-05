@@ -25,15 +25,15 @@ output "registry_url" {
 
 output "network_id" {
   description = "VPC network ID"
-  value       = yandex_vpc_network.concierge_network.id
+  value       = data.yandex_vpc_network.concierge_network.id
 }
 
 output "subnet_ids" {
   description = "Subnet IDs"
   value = {
-    a = yandex_vpc_subnet.concierge_subnet_a.id
-    b = yandex_vpc_subnet.concierge_subnet_b.id
-    c = yandex_vpc_subnet.concierge_subnet_c.id
+    a = data.yandex_vpc_subnet.concierge_subnet_a.id
+    b = data.yandex_vpc_subnet.concierge_subnet_b.id
+    c = data.yandex_vpc_subnet.concierge_subnet_c.id
   }
 }
 
