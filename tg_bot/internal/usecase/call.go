@@ -106,10 +106,10 @@ func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64, callerName 
 		return nil, fmt.Errorf("unexpected session state: %s", session.State)
 	}
 
-	// если имя задано — агент звонит от его имени
+	// агент — ассистент клиента; имя называет только если спросят напрямую
 	taskContext := session.PendingContext
 	if callerName != "" {
-		taskContext = fmt.Sprintf("Ты звонишь от имени человека по имени %s. %s", callerName, session.PendingContext)
+		taskContext = fmt.Sprintf("%s\n\nВажно: ты — ассистент и звонишь по поручению клиента, не представляйся его именем и не называйся им. Имя клиента — %s; называй его только если собеседник прямо спросит (например, на чьё имя оформить или забронировать).", session.PendingContext, callerName)
 	}
 
 	callID, events, err := u.caller.StartCall(ctx, session.PendingPhone, taskContext)
