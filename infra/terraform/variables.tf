@@ -108,7 +108,7 @@ variable "asterisk_version" {
 variable "voice_agent_version" {
   description = "Voice agent container version in registry"
   type        = string
-  default     = "1.0.13"
+  default     = "1.0.14"
 }
 
 variable "tg_bot_token" {

@@ -34,8 +34,22 @@ type AppConfig struct {
 	InstructionsTemplate string
 }
 
-func (c *AppConfig) BuildInstructions(userContext string) string {
+// nonInteractiveRule — для обычных звонков агент не может спросить клиента,
+// поэтому при незнании детали должен честно отложиться, а не выдумывать
+const nonInteractiveRule = `
+
+НЕ ВЫДУМЫВАЙ (важно):
+- Ты НЕ знаешь детали, которые решает только клиент: сколько будет гостей, дату и время, любые предпочтения (где стол, какие блюда).
+- Категорически НЕЛЬЗЯ называть такие детали наугад — не придумывай число людей, время или выбор за клиента.
+- Если собеседник спрашивает то, чего ты не знаешь, — честно скажи, что не можешь подтвердить эту деталь сейчас, уточнишь у клиента и перезвонишь. Не придумывай конкретику.
+- Имя, от которого ты звонишь, ты знаешь из задачи — его называть можно.`
+
+func (c *AppConfig) buildBase(userContext string) string {
 	return strings.ReplaceAll(c.InstructionsTemplate, "{context}", userContext)
+}
+
+func (c *AppConfig) BuildInstructions(userContext string) string {
+	return c.buildBase(userContext) + nonInteractiveRule
 }
 
 const interactiveInstructions = `
@@ -49,9 +63,10 @@ const interactiveInstructions = `
 - Вызывай инструмент МОЛЧА: не произноси и не зачитывай вслух ни вызов, ни его аргументы, ни JSON.
 - После того как получишь уточнение, продолжи разговор с учётом этой информации.`
 
-// BuildInstructionsInteractive добавляет блок про ask_principal.
+// BuildInstructionsInteractive добавляет блок про ask_principal (вместо правила
+// nonInteractiveRule — в интерактиве агент спрашивает клиента, а не откладывается)
 func (c *AppConfig) BuildInstructionsInteractive(userContext string) string {
-	return c.BuildInstructions(userContext) + interactiveInstructions
+	return c.buildBase(userContext) + interactiveInstructions
 }
 
 func LoadConfig() (*AppConfig, error) {
