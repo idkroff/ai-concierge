@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"tg_bot/internal/domain/entity"
@@ -23,7 +24,7 @@ type Client struct {
 
 func NewClient(baseURL string) *Client {
 	httpBase := baseURL
-	if strings.HasPrefix(baseURL, "ws") { // ws:// -> http://, wss:// -> https://
+	if strings.HasPrefix(baseURL, "ws") { // ws->http, wss->https
 		httpBase = "http" + strings.TrimPrefix(baseURL, "ws")
 	}
 	return &Client{
@@ -49,7 +50,7 @@ type apiError struct {
 	Error string `json:"error"`
 }
 
-// Parse — preview через /parse caller-сервиса: резолв номера без старта звонка.
+// Parse резолвит номер через /parse, не стартуя звонок.
 func (c *Client) Parse(ctx context.Context, message string) (*entity.ParsedCall, error) {
 	body, err := json.Marshal(parseRequest{Text: message})
 	if err != nil {
@@ -93,6 +94,14 @@ type startCallMsg struct {
 	Action      string `json:"action"`
 	PhoneNumber string `json:"phone_number"`
 	Text        string `json:"text"`
+	Interactive bool   `json:"interactive"`
+}
+
+type clarificationResponseMsg struct {
+	Action          string `json:"action"`
+	CallID          string `json:"call_id"`
+	ClarificationID string `json:"clarification_id"`
+	Response        string `json:"response"`
 }
 
 type wsEvent struct {
@@ -105,33 +114,48 @@ type errorPayload struct {
 	Message string `json:"message"`
 }
 
-func (c *Client) StartCall(ctx context.Context, phoneNumber, text string) (string, <-chan entity.CallEvent, error) {
+// StartCall открывает ws-звонок и возвращает respond для ответов на доуточнения
+// по тому же соединению.
+func (c *Client) StartCall(ctx context.Context, phoneNumber, text string, interactive bool) (string, <-chan entity.CallEvent, func(clarificationID, answer string) error, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.wsURL, nil)
 	if err != nil {
-		return "", nil, fmt.Errorf("ws dial: %w", err)
+		return "", nil, nil, fmt.Errorf("ws dial: %w", err)
 	}
 
-	// Читаем ws.connected
-	if _, _, err := conn.ReadMessage(); err != nil {
+	if _, _, err := conn.ReadMessage(); err != nil { // ws.connected
 		conn.Close()
-		return "", nil, fmt.Errorf("ws read connected: %w", err)
+		return "", nil, nil, fmt.Errorf("ws read connected: %w", err)
 	}
 
-	// Отправляем команду с уже найденным номером (caller-сервис не парсит повторно)
-	if err := conn.WriteJSON(startCallMsg{Action: "start_call", PhoneNumber: phoneNumber, Text: text}); err != nil {
+	// Номер уже найден — caller-сервис не парсит повторно.
+	if err := conn.WriteJSON(startCallMsg{Action: "start_call", PhoneNumber: phoneNumber, Text: text, Interactive: interactive}); err != nil {
 		conn.Close()
-		return "", nil, fmt.Errorf("ws write: %w", err)
+		return "", nil, nil, fmt.Errorf("ws write: %w", err)
 	}
 
-	// Ждём call.started или call.error (в рамках ctx с timeout)
 	callID, err := waitForCallStarted(ctx, conn)
 	if err != nil {
 		conn.Close()
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
-	// Дальше события идут в фоне - снимаем дедлайн и читаем до конца звонка
+	// Дальше события идут в фоне — снимаем дедлайн чтения.
 	conn.SetReadDeadline(time.Time{})
+
+	// writeMu сериализует писателей в conn (gorilla: 1 reader + 1 writer):
+	// respond (из хендлера) и close-фрейм (из read-loop).
+	var writeMu sync.Mutex
+	respond := func(clarificationID, answer string) error {
+		log.Printf("[caller-ws] -> clarification.response call=%s clar=%s ans=%q", callID, clarificationID, answer)
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.WriteJSON(clarificationResponseMsg{
+			Action:          "clarification.response",
+			CallID:          callID,
+			ClarificationID: clarificationID,
+			Response:        answer,
+		})
+	}
 
 	events := make(chan entity.CallEvent, 32)
 	go func() {
@@ -149,16 +173,18 @@ func (c *Client) StartCall(ctx context.Context, phoneNumber, text string) (strin
 			}
 			events <- entity.CallEvent{Type: ev.Type, CallID: ev.CallID, Payload: ev.Payload}
 			if ev.Type == "call.ended" || ev.Type == "call.error" {
+				writeMu.Lock()
 				conn.WriteMessage(
 					websocket.CloseMessage,
 					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 				)
+				writeMu.Unlock()
 				return
 			}
 		}
 	}()
 
-	return callID, events, nil
+	return callID, events, respond, nil
 }
 
 func waitForCallStarted(ctx context.Context, conn *websocket.Conn) (string, error) {

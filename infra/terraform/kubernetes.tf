@@ -330,6 +330,11 @@ resource "kubernetes_deployment" "voice_agent" {
           }
 
           env {
+            name  = "DEBUG_EVENTS"
+            value = "1"
+          }
+
+          env {
             name = "AMI_HOST"
             value_from {
               config_map_key_ref {

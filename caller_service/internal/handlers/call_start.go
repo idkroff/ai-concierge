@@ -62,7 +62,7 @@ func (h *CallHandler) HandleCallStart(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[%s] 🚀 Звонок инициирован на номер %s, контекст: %s\n", callID, parsed.PhoneNumber, parsed.Context)
 
-	go h.service.HandleCall(callID, parsed.PhoneNumber, parsed.Context, events.NoopEmitter{})
+	go h.service.HandleCall(callID, parsed.PhoneNumber, parsed.Context, false, events.NoopEmitter{})
 }
 
 func (h *CallHandler) sendError(w http.ResponseWriter, message string, statusCode int) {

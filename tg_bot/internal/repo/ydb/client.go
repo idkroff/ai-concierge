@@ -41,6 +41,7 @@ func (c *Client) EnsureTables(ctx context.Context) error {
 				user_id Int64,
 				name Utf8,
 				phone Utf8,
+				interactive_mode Bool,
 				PRIMARY KEY (user_id)
 			)`,
 		},
@@ -67,5 +68,31 @@ func (c *Client) EnsureTables(ctx context.Context) error {
 			return fmt.Errorf("create table %s: %w", t.name, err)
 		}
 	}
+
+	// CREATE выше пропускается для уже существующих таблиц, поэтому колонку добавляем отдельным ALTER
+	if err := c.ensureColumn(ctx, "users", "interactive_mode", "Bool"); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ensureColumn идемпотентно добавляет колонку, если её ещё нет.
+func (c *Client) ensureColumn(ctx context.Context, tableName, column, ydbType string) error {
+	fullPath := path.Join(c.prefix, tableName)
+	return c.db.Table().Do(ctx, func(ctx context.Context, s table.Session) error {
+		desc, err := s.DescribeTable(ctx, fullPath)
+		if err != nil {
+			return fmt.Errorf("describe %s: %w", tableName, err)
+		}
+		for _, col := range desc.Columns {
+			if col.Name == column {
+				return nil
+			}
+		}
+		ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, column, ydbType)
+		if err := s.ExecuteSchemeQuery(ctx, ddl); err != nil {
+			return fmt.Errorf("add column %s.%s: %w", tableName, column, err)
+		}
+		return nil
+	})
 }

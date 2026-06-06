@@ -31,7 +31,7 @@ type Config struct {
 	AMIUser         string
 	AMIPassword     string
 	AudioSocketPort string
-	PJSIPEndpoint  string // Имя PJSIP endpoint/trunk для исходящих (например zvonok)
+	PJSIPEndpoint   string // Имя PJSIP endpoint/trunk для исходящих (например zvonok)
 }
 
 // DefaultConfig возвращает конфигурацию по умолчанию
@@ -99,18 +99,18 @@ type Client struct {
 
 // AudioSession представляет сессию аудио-стрима
 type AudioSession struct {
-	ID               string
-	ChannelID        string      // Asterisk Channel Uniqueid
-	AudioInput       chan []byte // Аудио от абонента (8kHz PCM16)
-	AudioOutput      chan []byte // Аудио для воспроизведения абоненту (8kHz PCM16)
-	Done             chan struct{}
-	AudioSocketReady chan struct{} // Сигнал что AudioSocket подключен
-	AllAudioSent     chan struct{} // Сигнал что все аудио отправлено в Asterisk
-	AudioOutputDone  chan struct{} // Сигнал от call_service: Yandex закончил генерацию аудио
-	doneOnce             sync.Once // Защита от повторного закрытия
-	readyOnce            sync.Once // Защита от повторного закрытия ready
-	audioSentOnce        sync.Once // Защита от повторного закрытия audioSent
-	audioOutputDoneOnce  sync.Once // Защита от повторного закрытия audioOutputDone
+	ID                  string
+	ChannelID           string      // Asterisk Channel Uniqueid
+	AudioInput          chan []byte // Аудио от абонента (8kHz PCM16)
+	AudioOutput         chan []byte // Аудио для воспроизведения абоненту (8kHz PCM16)
+	Done                chan struct{}
+	AudioSocketReady    chan struct{} // Сигнал что AudioSocket подключен
+	AllAudioSent        chan struct{} // Сигнал что все аудио отправлено в Asterisk
+	AudioOutputDone     chan struct{} // Сигнал от call_service: Yandex закончил генерацию аудио
+	doneOnce            sync.Once     // Защита от повторного закрытия
+	readyOnce           sync.Once     // Защита от повторного закрытия ready
+	audioSentOnce       sync.Once     // Защита от повторного закрытия audioSent
+	audioOutputDoneOnce sync.Once     // Защита от повторного закрытия audioOutputDone
 }
 
 // SignalAudioOutputDone сигнализирует Producer-у что новых аудио-данных от Yandex не будет.
@@ -576,11 +576,11 @@ func (c *Client) handleAudioSocketConnection(conn net.Conn) {
 				audioOutputDoneCh = nil
 				log.Printf("✅ Producer: сигнал AudioOutputDone, сливаем остатки...")
 				// Читаем из канала пока есть данные; выходим когда канал пуст 50мс подряд
-			// или общий таймаут 2с истёк (страховка).
-			drainTimeout := time.NewTimer(2 * time.Second)
-			idleTimer := time.NewTimer(50 * time.Millisecond)
-			defer drainTimeout.Stop()
-			defer idleTimer.Stop()
+				// или общий таймаут 2с истёк (страховка).
+				drainTimeout := time.NewTimer(2 * time.Second)
+				idleTimer := time.NewTimer(50 * time.Millisecond)
+				defer drainTimeout.Stop()
+				defer idleTimer.Stop()
 			drain:
 				for {
 					select {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"sync"
 
 	"tg_bot/internal/domain/entity"
 	"tg_bot/internal/domain/repo"
@@ -11,7 +13,7 @@ import (
 
 type CallerClient interface {
 	Parse(ctx context.Context, text string) (*entity.ParsedCall, error)
-	StartCall(ctx context.Context, phoneNumber, text string) (callID string, events <-chan entity.CallEvent, err error)
+	StartCall(ctx context.Context, phoneNumber, text string, interactive bool) (callID string, events <-chan entity.CallEvent, respond func(clarificationID, answer string) error, err error)
 }
 
 type TranscriptRole string
@@ -22,20 +24,22 @@ const (
 	RoleCallee TranscriptRole = "callee"
 )
 
-// TranscriptEntry — одна реплика в диалоге.
 type TranscriptEntry struct {
 	Role TranscriptRole
 	Text string
 }
 
-// CallUpdate — текущее состояние звонка для отображения.
 type CallUpdate struct {
 	Transcript      []TranscriptEntry
-	AgentStreaming  string // текст агента в процессе генерации
-	AbonentSpeaking bool   // абонент сейчас говорит
+	AgentStreaming  string
+	AbonentSpeaking bool
 	Ended           bool
 	EndReason       string
 	Error           string
+
+	ClarificationID       string
+	ClarificationQuestion string
+	Notice                string
 }
 
 type ConfirmationRequest struct {
@@ -54,6 +58,13 @@ type CallResult struct {
 type CallUsecase struct {
 	sessions repo.SessionRepository
 	caller   CallerClient
+	live     sync.Map // userID -> *liveCall
+}
+
+// liveCall — хендл активного звонка для ответа на доуточнение.
+type liveCall struct {
+	callID  string
+	respond func(clarificationID, answer string) error
 }
 
 func NewCallUsecase(
@@ -96,7 +107,7 @@ func (u *CallUsecase) HandleMessage(ctx context.Context, userID int64, message s
 	}, nil
 }
 
-func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64, callerName string) (*CallResult, error) {
+func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64, callerName string, interactive bool) (*CallResult, error) {
 	session, err := u.sessions.Get(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
@@ -112,7 +123,7 @@ func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64, callerName 
 		taskContext = fmt.Sprintf("%s\n\nВажно: ты — ассистент и звонишь по поручению клиента, не представляйся его именем и не называйся им. Имя клиента — %s; называй его только если собеседник прямо спросит (например, на чьё имя оформить или забронировать).", session.PendingContext, callerName)
 	}
 
-	callID, events, err := u.caller.StartCall(ctx, session.PendingPhone, taskContext)
+	callID, events, respond, err := u.caller.StartCall(ctx, session.PendingPhone, taskContext, interactive)
 	if err != nil {
 		return nil, fmt.Errorf("start call: %w", err)
 	}
@@ -126,7 +137,35 @@ func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64, callerName 
 		return nil, fmt.Errorf("save session: %w", err)
 	}
 
-	return &CallResult{CallID: callID, Updates: watchEvents(events)}, nil
+	u.live.Store(userID, &liveCall{callID: callID, respond: respond})
+
+	// Чистим реестр, когда поток обновлений закроется (звонок завершён).
+	updates := watchEvents(events)
+	out := make(chan CallUpdate, 8)
+	go func() {
+		defer close(out)
+		defer u.live.Delete(userID)
+		for upd := range updates {
+			out <- upd
+		}
+	}()
+
+	return &CallResult{CallID: callID, Updates: out}, nil
+}
+
+// AnswerClarification отправляет ответ клиента на доуточнение в живой звонок.
+func (u *CallUsecase) AnswerClarification(ctx context.Context, userID int64, clarificationID, answer string) error {
+	v, ok := u.live.Load(userID)
+	if !ok {
+		log.Printf("[clarify] AnswerClarification: нет активного звонка для user=%d", userID)
+		return fmt.Errorf("нет активного звонка")
+	}
+	lc := v.(*liveCall)
+	if lc.respond == nil {
+		return fmt.Errorf("ответ недоступен")
+	}
+	log.Printf("[clarify] AnswerClarification user=%d call=%s clar=%s", userID, lc.callID, clarificationID)
+	return lc.respond(clarificationID, answer)
 }
 
 func (u *CallUsecase) CancelCall(ctx context.Context, userID int64) error {
@@ -208,6 +247,31 @@ func watchEvents(events <-chan entity.CallEvent) <-chan CallUpdate {
 					agentText = ""
 					abonentSpeaking = false
 					send(false, "", "")
+				}
+
+			case "clarification.request":
+				var p struct {
+					ClarificationID string `json:"clarification_id"`
+					Question        string `json:"question"`
+				}
+				_ = json.Unmarshal(ev.Payload, &p)
+				log.Printf("[clarify] <- clarification.request call=%s clar=%s q=%q", ev.CallID, p.ClarificationID, p.Question)
+				snap := make([]TranscriptEntry, len(transcript))
+				copy(snap, transcript)
+				ch <- CallUpdate{
+					Transcript:            snap,
+					AgentStreaming:        agentText,
+					ClarificationID:       p.ClarificationID,
+					ClarificationQuestion: p.Question,
+				}
+
+			case "clarification.timeout":
+				snap := make([]TranscriptEntry, len(transcript))
+				copy(snap, transcript)
+				ch <- CallUpdate{
+					Transcript:     snap,
+					AgentStreaming: agentText,
+					Notice:         "⌛ Время на уточнение истекло — продолжаю звонок.",
 				}
 
 			case "call.ended":

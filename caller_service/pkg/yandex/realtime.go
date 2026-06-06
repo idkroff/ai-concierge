@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// Event types
+// debugEvents=1 включает сырой дамп всех событий в лог.
+var debugEvents = os.Getenv("DEBUG_EVENTS") == "1"
+
 type Event struct {
 	Type       string          `json:"type"`
 	Session    json.RawMessage `json:"session,omitempty"`
@@ -21,6 +24,19 @@ type Event struct {
 	Error      json.RawMessage `json:"error,omitempty"`
 	Message    string          `json:"message,omitempty"`
 	Transcript string          `json:"transcript,omitempty"`
+
+	// Поля function-call: приходят на response.function_call_arguments.done и в output-item-ах.
+	CallID    string          `json:"call_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments string          `json:"arguments,omitempty"`
+	Item      json.RawMessage `json:"item,omitempty"`
+}
+
+// FunctionCall — нормализованный вызов инструмента моделью.
+type FunctionCall struct {
+	CallID    string
+	Name      string
+	Arguments string
 }
 
 type SessionUpdate struct {
@@ -29,10 +45,33 @@ type SessionUpdate struct {
 }
 
 type SessionConfig struct {
-	Type             string      `json:"type"`
-	OutputModalities []string    `json:"output_modalities"`
-	Audio            AudioConfig `json:"audio"`
-	Instructions     string      `json:"instructions"`
+	Type             string           `json:"type"`
+	OutputModalities []string         `json:"output_modalities"`
+	Audio            AudioConfig      `json:"audio"`
+	Instructions     string           `json:"instructions"`
+	Tools            []ToolDefinition `json:"tools,omitempty"`
+	ToolChoice       string           `json:"tool_choice,omitempty"`
+}
+
+// ToolDefinition — описание инструмента для session.update.
+type ToolDefinition struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+// askPrincipalTool объявляется только в интерактивном режиме.
+var askPrincipalTool = ToolDefinition{
+	Type:        "function",
+	Name:        "ask_principal",
+	Description: "Спроси клиента (того, по чьему поручению ты звонишь), когда собеседник запрашивает информацию, которой ты НЕ можешь знать и которая известна только клиенту: число гостей, на чьё имя, дата и время, предпочтения, любые детали брони или заказа. НИКОГДА не выдумывай такие данные — сразу вызывай этот инструмент. Вызывай его молча, не зачитывая вслух. В поле question задай короткий конкретный вопрос клиенту на русском.",
+	Parameters:  json.RawMessage(`{"type":"object","properties":{"question":{"type":"string","description":"Короткий конкретный вопрос клиенту, напр. 'На сколько человек бронировать?'"}},"required":["question"]}`),
+}
+
+type ConversationItemCreate struct {
+	Type string          `json:"type"`
+	Item json.RawMessage `json:"item"`
 }
 
 type AudioConfig struct {
@@ -86,33 +125,43 @@ type Client struct {
 	apiKey       string
 	folder       string
 	instructions string
+	interactive  bool
 
-	// Каналы для коммуникации
-	audioOutput chan []byte // Аудио от Yandex (для воспроизведения)
-	textOutput  chan string // Текстовый ответ от Yandex
-	events      chan Event  // Все события
+	audioOutput   chan []byte
+	textOutput    chan string
+	events        chan Event
+	functionCalls chan FunctionCall
+	fcArgs        map[string]string // накопление аргументов тула по call_id (только eventLoop)
 
-	// Управление
 	stopChan chan struct{}
 	wg       sync.WaitGroup
 	mu       sync.Mutex
+	writeMu  sync.Mutex // сериализует все записи в conn (gorilla: 1 writer)
 
-	// Состояние
 	connected    bool
 	sessionReady bool
 }
 
 // NewClient создает новый клиент Yandex Realtime API
-func NewClient(apiKey, folder, instructions string) *Client {
+func NewClient(apiKey, folder, instructions string, interactive bool) *Client {
 	return &Client{
-		apiKey:       apiKey,
-		folder:       folder,
-		instructions: instructions,
-		audioOutput:  make(chan []byte, 100),
-		textOutput:   make(chan string, 10),
-		events:       make(chan Event, 50),
-		stopChan:     make(chan struct{}),
+		apiKey:        apiKey,
+		folder:        folder,
+		instructions:  instructions,
+		interactive:   interactive,
+		audioOutput:   make(chan []byte, 100),
+		textOutput:    make(chan string, 10),
+		events:        make(chan Event, 50),
+		functionCalls: make(chan FunctionCall, 8),
+		fcArgs:        make(map[string]string),
+		stopChan:      make(chan struct{}),
 	}
+}
+
+func (c *Client) writeJSON(v interface{}) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteJSON(v)
 }
 
 // Connect подключается к Yandex Realtime API
@@ -130,13 +179,11 @@ func (c *Client) Connect() error {
 	c.conn = conn
 	c.connected = true
 
-	// Ждём событие session.created
 	var created Event
 	if err := c.conn.ReadJSON(&created); err != nil {
 		return fmt.Errorf("ошибка чтения session.created: %w", err)
 	}
 
-	// Логируем полученное событие для отладки
 	fmt.Printf("🔍 Получено событие от Yandex: type=%s\n", created.Type)
 	if created.Type == "error" || created.Message != "" {
 		errorDetails, _ := json.Marshal(created)
@@ -144,7 +191,6 @@ func (c *Client) Connect() error {
 	}
 
 	if created.Type != "session.created" {
-		// Если пришла ошибка, выводим детали
 		if created.Type == "error" {
 			errorMsg := "неизвестная ошибка"
 			if created.Message != "" {
@@ -152,18 +198,16 @@ func (c *Client) Connect() error {
 			} else if len(created.Error) > 0 {
 				errorMsg = string(created.Error)
 			}
-			// Пытаемся распарсить полный JSON ошибки
 			errorJSON, _ := json.MarshalIndent(created, "", "  ")
 			return fmt.Errorf("ошибка от Yandex API: %s\nДетали: %s", errorMsg, string(errorJSON))
 		}
 		return fmt.Errorf("неожиданный тип события: %s (ожидался session.created). Полное событие: %+v", created.Type, created)
 	}
 
-	// Запускаем обработчик событий ДО отправки session.update
+	// Запускаем обработчик событий ДО отправки session.update.
 	c.wg.Add(1)
 	go c.eventLoop()
 
-	// Обновляем сессию (событие session.updated придет в eventLoop)
 	if err := c.updateSession(); err != nil {
 		return err
 	}
@@ -173,39 +217,41 @@ func (c *Client) Connect() error {
 
 // updateSession обновляет настройки сессии
 func (c *Client) updateSession() error {
-	sessionUpdate := SessionUpdate{
-		Type: "session.update",
-		Session: SessionConfig{
-			Type:             "realtime",
-			OutputModalities: []string{"audio"},
-			Audio: AudioConfig{
-				Input: InputAudioConfig{
-					Format: AudioFormat{
-						Type: "audio/pcm",
-						Rate: 24000,
-					},
-					TurnDetection: TurnDetection{
-						Type:              "server_vad",
-						Threshold:         0.5,
-						SilenceDurationMs: 2200, // Увеличено с 400 до 1200мс - ждем дольше перед ответом
-					},
-					InputAudioTranscription: InputAudioTranscriptionConfig{
-						Model: "whisper-1",
-					},
+	session := SessionConfig{
+		Type:             "realtime",
+		OutputModalities: []string{"audio"},
+		Audio: AudioConfig{
+			Input: InputAudioConfig{
+				Format: AudioFormat{
+					Type: "audio/pcm",
+					Rate: 24000,
 				},
-				Output: OutputAudioConfig{
-					Format: AudioFormat{
-						Type: "audio/pcm",
-						Rate: 44100, // 44.1kHz (стандартная частота, будем конвертировать в 8kHz)
-					},
-					Voice: "marina",
+				TurnDetection: TurnDetection{
+					Type:              "server_vad",
+					Threshold:         0.5,
+					SilenceDurationMs: 2200, // ждём дольше перед ответом
+				},
+				InputAudioTranscription: InputAudioTranscriptionConfig{
+					Model: "whisper-1",
 				},
 			},
-			Instructions: c.instructions,
+			Output: OutputAudioConfig{
+				Format: AudioFormat{
+					Type: "audio/pcm",
+					Rate: 44100, // 44.1kHz (стандартная частота, будем конвертировать в 8kHz)
+				},
+				Voice: "marina",
+			},
 		},
+		Instructions: c.instructions,
 	}
 
-	return c.conn.WriteJSON(sessionUpdate)
+	if c.interactive {
+		session.Tools = []ToolDefinition{askPrincipalTool}
+		session.ToolChoice = "auto"
+	}
+
+	return c.writeJSON(SessionUpdate{Type: "session.update", Session: session})
 }
 
 // SendAudio отправляет аудио данные в API (должно быть PCM 24kHz)
@@ -215,7 +261,7 @@ func (c *Client) SendAudio(audioData []byte) error {
 		Audio: base64.StdEncoding.EncodeToString(audioData),
 	}
 
-	return c.conn.WriteJSON(msg)
+	return c.writeJSON(msg)
 }
 
 // SendAudioChunked отправляет аудио чанками
@@ -253,15 +299,51 @@ func (c *Client) TriggerResponse(instructions string) error {
 		},
 	}
 
-	return c.conn.WriteJSON(responseCreate)
+	return c.writeJSON(responseCreate)
 }
 
-// eventLoop обрабатывает входящие события
+// SubmitFunctionOutput отдаёт результат вызова инструмента модели.
+// После него нужно вызвать TriggerResponse, чтобы модель продолжила разговор.
+func (c *Client) SubmitFunctionOutput(callID, output string) error {
+	item, err := json.Marshal(map[string]string{
+		"type":    "function_call_output",
+		"call_id": callID,
+		"output":  output,
+	})
+	if err != nil {
+		return err
+	}
+	return c.writeJSON(ConversationItemCreate{Type: "conversation.item.create", Item: item})
+}
+
+// InjectText добавляет в диалог текстовое сообщение — страховка на случай,
+// если function_call_output будет проигнорирован моделью.
+func (c *Client) InjectText(role, text string) error {
+	item, err := json.Marshal(map[string]interface{}{
+		"type": "message",
+		"role": role,
+		"content": []map[string]string{
+			{"type": "input_text", "text": text},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return c.writeJSON(ConversationItemCreate{Type: "conversation.item.create", Item: item})
+}
+
+// FunctionCalls возвращает канал вызовов инструментов моделью.
+func (c *Client) FunctionCalls() <-chan FunctionCall {
+	return c.functionCalls
+}
+
+// eventLoop обрабатывает входящие события.
 func (c *Client) eventLoop() {
 	defer c.wg.Done()
 	defer close(c.audioOutput)
 	defer close(c.textOutput)
 	defer close(c.events)
+	defer close(c.functionCalls)
 
 	c.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 
@@ -272,19 +354,17 @@ func (c *Client) eventLoop() {
 		default:
 		}
 
-		var event Event
-		if err := c.conn.ReadJSON(&event); err != nil {
-			// Игнорируем ошибки при закрытии соединения
+		_, raw, err := c.conn.ReadMessage()
+		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				return
 			}
-			// Проверяем, не закрыли ли мы соединение сами
+			// Не закрыли ли мы соединение сами?
 			select {
 			case <-c.stopChan:
 				return
 			default:
 			}
-			// Игнорируем ошибки "use of closed network connection"
 			if c.isConnectionClosed() {
 				return
 			}
@@ -292,30 +372,30 @@ func (c *Client) eventLoop() {
 			return
 		}
 
-		// Обновляем таймаут
 		c.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 
-		// Отправляем событие в канал
+		var event Event
+		if err := json.Unmarshal(raw, &event); err != nil {
+			fmt.Printf("⚠️  Yandex: не разобрал событие: %v | raw=%s\n", err, string(raw))
+			continue
+		}
+
+		// Сырой дамп события (кроме аудио-дельт — они огромные).
+		if debugEvents && event.Type != "response.output_audio.delta" {
+			fmt.Printf("🔽 RAW %s\n", string(raw))
+		}
+
 		select {
 		case c.events <- event:
 		default:
 		}
 
-		// Логируем все события для отладки
-		if event.Type != "response.output_audio.delta" && event.Type != "response.output_text.delta" {
-			if event.Type == "error" {
-				errorJSON, _ := json.MarshalIndent(event, "", "  ")
-				fmt.Printf("🔔 Yandex event: %s\n%s\n", event.Type, string(errorJSON))
-			} else {
-				fmt.Printf("🔔 Yandex event: %s\n", event.Type)
-			}
-		}
 		if event.Type == "error" {
-			details, _ := json.MarshalIndent(event, "", "  ")
-			fmt.Printf("❌ Yandex error event: %s\n", string(details))
+			fmt.Printf("❌ Yandex error event: %s\n", string(raw))
+		} else if !debugEvents && event.Type != "response.output_audio.delta" && event.Type != "response.output_text.delta" {
+			fmt.Printf("🔔 Yandex event: %s\n", event.Type)
 		}
 
-		// Обрабатываем специфичные события
 		switch event.Type {
 		case "session.updated":
 			fmt.Println("✅ Yandex session готова")
@@ -328,7 +408,6 @@ func (c *Client) eventLoop() {
 					select {
 					case c.audioOutput <- audioData:
 					default:
-						// Буфер полон
 					}
 				}
 			}
@@ -340,7 +419,33 @@ func (c *Client) eventLoop() {
 				default:
 				}
 			}
+
+		case "response.function_call_arguments.delta":
+			// Аргументы тула приходят чанками — копим по call_id.
+			if event.CallID != "" && event.Delta != "" {
+				c.fcArgs[event.CallID] += event.Delta
+			}
+
+		case "response.function_call_arguments.done":
+			// Готовый вызов: доставляем блокирующе — терять его нельзя.
+			if event.CallID != "" {
+				args := event.Arguments
+				if args == "" {
+					args = c.fcArgs[event.CallID]
+				}
+				delete(c.fcArgs, event.CallID)
+				fmt.Printf("🛠️  Yandex function_call done: call_id=%s name=%q args=%q\n", event.CallID, event.Name, args)
+				c.emitFunctionCall(FunctionCall{CallID: event.CallID, Name: event.Name, Arguments: args})
+			}
 		}
+	}
+}
+
+// emitFunctionCall блокирующе доставляет вызов инструмента.
+func (c *Client) emitFunctionCall(fc FunctionCall) {
+	select {
+	case c.functionCalls <- fc:
+	case <-c.stopChan:
 	}
 }
 
@@ -372,11 +477,13 @@ func (c *Client) Close() error {
 	c.connected = false
 
 	if c.conn != nil {
-		// Отправляем нормальный close-фрейм чтобы избежать 1006 abnormal closure на стороне eventLoop
+		// Нормальный close-фрейм, иначе eventLoop получит 1006 abnormal closure.
+		c.writeMu.Lock()
 		_ = c.conn.WriteMessage(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 		)
+		c.writeMu.Unlock()
 		c.conn.Close()
 	}
 

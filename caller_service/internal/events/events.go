@@ -5,37 +5,40 @@ import (
 	"time"
 )
 
-// Типы событий — добавляй новые константы и payload-структуры по необходимости.
 const (
-	// Подключение
 	WSConnected = "ws.connected"
 
 	// Жизненный цикл звонка
 	CallStarted    = "call.started"
 	CallConnecting = "call.connecting"
-	CallEnded = "call.ended"
-	CallError = "call.error"
+	CallEnded      = "call.ended"
+	CallError      = "call.error"
 
 	// Asterisk
 	AsteriskOriginateSent     = "asterisk.originate_sent"
 	AsteriskOriginateResponse = "asterisk.originate_response"
 	AsteriskAudiosocketReady  = "asterisk.audiosocket_ready"
-	AsteriskHangup           = "asterisk.hangup"
+	AsteriskHangup            = "asterisk.hangup"
 
 	// Yandex Realtime
-	YandexConnecting    = "yandex.connecting"
-	YandexConnected     = "yandex.connected"
-	YandexSessionReady  = "yandex.session_ready"
-	YandexEvent         = "yandex.event"
-	YandexTextDelta     = "yandex.text_delta"
-	YandexAudioChunk    = "yandex.audio_chunk"
+	YandexConnecting      = "yandex.connecting"
+	YandexConnected       = "yandex.connected"
+	YandexSessionReady    = "yandex.session_ready"
+	YandexEvent           = "yandex.event"
+	YandexTextDelta       = "yandex.text_delta"
+	YandexAudioChunk      = "yandex.audio_chunk"
 	YandexSpeechStarted   = "yandex.speech_started"
 	YandexSpeechStopped   = "yandex.speech_stopped"
 	YandexResponseDone    = "yandex.response_done"
 	YandexInputTranscript = "yandex.input_transcript"
+
+	// Интерактивный режим (доуточнение у клиента во время звонка)
+	ClarificationRequest  = "clarification.request"
+	ClarificationResolved = "clarification.resolved"
+	ClarificationTimeout  = "clarification.timeout"
 )
 
-// Event — универсальный envelope для любого события.
+// Event — envelope для любого события.
 type Event struct {
 	Type      string          `json:"type"`
 	CallID    string          `json:"call_id,omitempty"`
@@ -52,8 +55,6 @@ type Emitter interface {
 type NoopEmitter struct{}
 
 func (NoopEmitter) Emit(Event) {}
-
-// Конструкторы событий (удобно добавлять новые: константа + функция).
 
 func NewCallStarted(callID, phoneNumber string) Event {
 	return newEvent(CallStarted, callID, map[string]string{"phone_number": phoneNumber})
@@ -131,6 +132,21 @@ func NewYandexResponseDone(callID string) Event {
 
 func NewYandexInputTranscript(callID, text string) Event {
 	return newEvent(YandexInputTranscript, callID, map[string]string{"text": text})
+}
+
+func NewClarificationRequest(callID, clarificationID, question string) Event {
+	return newEvent(ClarificationRequest, callID, map[string]string{
+		"clarification_id": clarificationID,
+		"question":         question,
+	})
+}
+
+func NewClarificationResolved(callID, clarificationID string) Event {
+	return newEvent(ClarificationResolved, callID, map[string]string{"clarification_id": clarificationID})
+}
+
+func NewClarificationTimeout(callID, clarificationID string) Event {
+	return newEvent(ClarificationTimeout, callID, map[string]string{"clarification_id": clarificationID})
 }
 
 func newEvent(typ, callID string, payload any) Event {

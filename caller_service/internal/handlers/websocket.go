@@ -36,6 +36,12 @@ type ClientMessage struct {
 	Action      string `json:"action"`
 	PhoneNumber string `json:"phone_number"`
 	Text        string `json:"text"` // сырое сообщение или контекст задачи
+	Interactive bool   `json:"interactive"`
+
+	// Для action == "clarification.response"
+	CallID          string `json:"call_id"`
+	ClarificationID string `json:"clarification_id"`
+	Response        string `json:"response"`
 }
 
 func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
@@ -65,11 +71,17 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		if msg.Action == "clarification.response" {
+			// Ответ клиента на доуточнение во время звонка — доставляем в живой звонок.
+			log.Printf("[ws] <- clarification.response call=%s clar=%s resp=%q", msg.CallID, msg.ClarificationID, msg.Response)
+			h.callService.DeliverClarification(msg.CallID, msg.Response)
+			continue
+		}
+
 		if msg.Action == "start_call" {
 			phoneNumber := msg.PhoneNumber
 			callContext := msg.Text
 
-			// Если phone_number не передан — парсим из text
 			if phoneNumber == "" {
 				if msg.Text == "" {
 					emitter.Emit(events.NewCallError("", "phone_number or text required", "ws"))
@@ -93,7 +105,7 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 			}
 
 			callID := uuid.New().String()
-			go h.callService.HandleCall(callID, phoneNumber, callContext, emitter)
+			go h.callService.HandleCall(callID, phoneNumber, callContext, msg.Interactive, emitter)
 		}
 	}
 }
