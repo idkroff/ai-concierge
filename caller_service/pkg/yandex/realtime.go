@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// debugEvents=1 включает сырой дамп всех событий Yandex Realtime в лог.
+var debugEvents = os.Getenv("DEBUG_EVENTS") == "1"
 
 // Event types
 type Event struct {
@@ -366,8 +370,8 @@ func (c *Client) eventLoop() {
 		default:
 		}
 
-		var event Event
-		if err := c.conn.ReadJSON(&event); err != nil {
+		_, raw, err := c.conn.ReadMessage()
+		if err != nil {
 			// Игнорируем ошибки при закрытии соединения
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				return
@@ -389,24 +393,27 @@ func (c *Client) eventLoop() {
 		// Обновляем таймаут
 		c.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 
+		var event Event
+		if err := json.Unmarshal(raw, &event); err != nil {
+			fmt.Printf("⚠️  Yandex: не разобрал событие: %v | raw=%s\n", err, string(raw))
+			continue
+		}
+
+		// Сырой дамп события (кроме аудио-дельт — они огромные). DEBUG_EVENTS=1.
+		if debugEvents && event.Type != "response.output_audio.delta" {
+			fmt.Printf("🔽 RAW %s\n", string(raw))
+		}
+
 		// Отправляем событие в канал
 		select {
 		case c.events <- event:
 		default:
 		}
 
-		// Логируем все события для отладки
-		if event.Type != "response.output_audio.delta" && event.Type != "response.output_text.delta" {
-			if event.Type == "error" {
-				errorJSON, _ := json.MarshalIndent(event, "", "  ")
-				fmt.Printf("🔔 Yandex event: %s\n%s\n", event.Type, string(errorJSON))
-			} else {
-				fmt.Printf("🔔 Yandex event: %s\n", event.Type)
-			}
-		}
 		if event.Type == "error" {
-			details, _ := json.MarshalIndent(event, "", "  ")
-			fmt.Printf("❌ Yandex error event: %s\n", string(details))
+			fmt.Printf("❌ Yandex error event: %s\n", string(raw))
+		} else if !debugEvents && event.Type != "response.output_audio.delta" && event.Type != "response.output_text.delta" {
+			fmt.Printf("🔔 Yandex event: %s\n", event.Type)
 		}
 
 		// Обрабатываем специфичные события
@@ -450,6 +457,7 @@ func (c *Client) eventLoop() {
 					args = c.fcArgs[event.CallID]
 				}
 				delete(c.fcArgs, event.CallID)
+				fmt.Printf("🛠️  Yandex function_call done: call_id=%s name=%q args=%q\n", event.CallID, event.Name, args)
 				c.emitFunctionCall(FunctionCall{CallID: event.CallID, Name: event.Name, Arguments: args})
 			}
 		}

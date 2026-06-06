@@ -148,6 +148,7 @@ func (c *Client) StartCall(ctx context.Context, phoneNumber, text string, intera
 	// respond (из хендлера) и close-фрейм (из read-loop).
 	var writeMu sync.Mutex
 	respond := func(clarificationID, answer string) error {
+		log.Printf("[caller-ws] -> clarification.response call=%s clar=%s ans=%q", callID, clarificationID, answer)
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		return conn.WriteJSON(clarificationResponseMsg{

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -17,6 +18,12 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// fillerHoldPCM — короткий аудио-клип «секундочку, уточняю» (8kHz LPCM 16-bit mono),
+// проигрывается собеседнику, пока ждём ответ клиента в интерактивном режиме.
+//
+//go:embed filler_hold.pcm
+var fillerHoldPCM []byte
 
 type CallService struct {
 	asteriskClient *asterisk.Client
@@ -73,12 +80,15 @@ func (s *CallService) DeliverClarification(callID, response string) bool {
 	cc := s.calls[callID]
 	s.mu.Unlock()
 	if cc == nil {
+		log.Printf("[ws] DeliverClarification: НЕТ живого звонка %s", callID)
 		return false
 	}
 	select {
 	case cc.answers <- response:
+		log.Printf("[ws] DeliverClarification: доставлено в %s (%q)", callID, response)
 		return true
 	default:
+		log.Printf("[ws] DeliverClarification: канал занят для %s", callID)
 		return false
 	}
 }
@@ -281,16 +291,34 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 		activeResponse := true // greeting-ответ выпускается сразу после спавна
 		pendingAction := ""    // отложенный response.create (R2), один слот
 		var fcCallID, fcClarID, fcQuestion string
-		lastHandledFC := ""
-		var clarTimer <-chan time.Time
+		var clarTimer <-chan time.Time   // 30с общий таймаут уточнения
+		var fillerTimer <-chan time.Time // повтор филлера, пока ждём ответ
+
+		// playFiller проигрывает собеседнику клип «секундочку, уточняю» (8kHz).
+		playFiller := func() {
+			if len(fillerHoldPCM) == 0 {
+				log.Printf("[%s] 🔊 filler: пусто (клип не загружен)", callID)
+				return
+			}
+			buf := make([]byte, len(fillerHoldPCM))
+			copy(buf, fillerHoldPCM)
+			select {
+			case session.AudioOutput <- buf:
+				log.Printf("[%s] 🔊 filler -> AudioOutput (%d байт)", callID, len(buf))
+			default:
+				log.Printf("[%s] ⚠️  filler ПОТЕРЯН (AudioOutput переполнен)", callID)
+			}
+		}
 
 		// respond выпускает response.create, не допуская двух активных ответов (R2).
 		respond := func(instr string) {
 			if activeResponse {
 				pendingAction = instr
+				log.Printf("[%s] ⏸️  respond ОТЛОЖЕН (активен ответ): %.60q", callID, instr)
 				return
 			}
 			activeResponse = true
+			log.Printf("[%s] ▶️  respond ВЫПУСК: %.60q", callID, instr)
 			if err := yandexClient.TriggerResponse(instr); err != nil {
 				log.Printf("[%s] ⚠️  Ошибка response.create: %v\n", callID, err)
 			}
@@ -334,19 +362,23 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 					functionCallsCh = nil
 					continue
 				}
-				if fc.CallID == lastHandledFC || fc.CallID == fcCallID {
-					continue // дубликат фолбэк-парсера
-				}
+				log.Printf("[%s] 🛠️  functionCall id=%s name=%q args=%q (clarState=%d)", callID, fc.CallID, fc.Name, fc.Arguments, clarState)
+				// ВНИМАНИЕ: у Yandex call_id НЕ уникален (там имя инструмента),
+				// поэтому дедуп по call_id невозможен — каждый вызов считаем новым.
 				if clarState != clarIdle {
-					log.Printf("[%s] ⚠️  ask_principal во время другого уточнения — busy\n", callID)
-					_ = yandexClient.SubmitFunctionOutput(fc.CallID, "Сейчас обрабатывается другой вопрос. Ответь собеседнику сам.")
+					// Уже идёт уточнение. Новый вызов игнорируем — НЕ закрываем текущий
+					// через function_call_output (call_id совпал бы и закрыл не тот).
+					log.Printf("[%s] 🛠️  уже идёт уточнение (clarState=%d) — игнор нового вызова", callID, clarState)
 					continue
 				}
 				fcCallID = fc.CallID
 				fcQuestion = parseQuestion(fc.Arguments)
 				clarState = clarClarifying
-				log.Printf("[%s] ❓ ask_principal: %s\n", callID, fcQuestion)
-				// филлер и clarification.request — после response.done тулзового ответа (R3)
+				log.Printf("[%s] ❓ ask_principal: %s → clarState=Clarifying", callID, fcQuestion)
+				// Сразу даём собеседнику аудио-филлер, чтобы он не слышал тишину
+				// (это аудио-канал Asterisk, не Yandex — сессию не трогает).
+				playFiller()
+				// clarification.request — после response.done тулзового ответа (R3)
 
 			case ans := <-cc.answers:
 				if clarState == clarAwaitingAnswer {
@@ -357,10 +389,17 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 					}
 					respond("Клиент уточнил: " + ans + ". Ответь собеседнику по сути, кратко, на русском.")
 					em.Emit(events.NewClarificationResolved(callID, fcClarID))
-					lastHandledFC = fcCallID
 					clarState = clarResolving
-					clarTimer = nil
+					clarTimer, fillerTimer = nil, nil
 					fcCallID, fcQuestion, fcClarID = "", "", ""
+				}
+
+			case <-fillerTimer:
+				if clarState == clarAwaitingAnswer {
+					playFiller()
+					fillerTimer = time.After(9 * time.Second)
+				} else {
+					fillerTimer = nil
 				}
 
 			case <-clarTimer:
@@ -369,15 +408,22 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 					_ = yandexClient.SubmitFunctionOutput(fcCallID, "Клиент не ответил вовремя, информация недоступна.")
 					respond("Вежливо извинись, что не получилось уточнить прямо сейчас, и продолжи разговор по сути. Не завершай звонок.")
 					em.Emit(events.NewClarificationTimeout(callID, fcClarID))
-					lastHandledFC = fcCallID
 					clarState = clarResolving
-					clarTimer = nil
+					clarTimer, fillerTimer = nil, nil
 					fcCallID, fcQuestion, fcClarID = "", "", ""
 				}
 
 			case event, ok := <-yandexClient.Events():
 				if !ok {
+					log.Printf("[%s] 🔌 Events() закрыт — выходим из events-горутины", callID)
 					return
+				}
+
+				switch event.Type {
+				case "response.output_audio.delta", "response.output_text.delta", "response.function_call_arguments.delta":
+					// высокочастотные дельты — без лога
+				default:
+					log.Printf("[%s] 🔔 ev=%s (clar=%d active=%v pending=%v)", callID, event.Type, clarState, activeResponse, pendingAction != "")
 				}
 
 				switch event.Type {
@@ -412,6 +458,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 					activeResponse = true
 					if clarState == clarResolving {
 						clarState = clarIdle // ответный response стартовал
+						log.Printf("[%s] ↩️  clarState=Resolving→Idle (ответный response стартовал)", callID)
 					}
 					log.Printf("[%s] 🤖 Генерация ответа начата\n", callID)
 
@@ -433,12 +480,14 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 						fcClarID = uuid.New().String()
 						em.Emit(events.NewClarificationRequest(callID, fcClarID, fcQuestion))
 						clarTimer = time.After(30 * time.Second)
+						fillerTimer = time.After(9 * time.Second) // повторим филлер, если ждём долго
 						clarState = clarAwaitingAnswer
-						log.Printf("[%s] 📨 Запрос уточнения отправлен клиенту\n", callID)
+						log.Printf("[%s] 📨 Запрос уточнения '%s' (clar=%s) отправлен; clarState=AwaitingAnswer, таймер 30с\n", callID, fcQuestion, fcClarID)
 					} else if pendingAction != "" {
 						a := pendingAction
 						pendingAction = ""
 						activeResponse = true
+						log.Printf("[%s] ▶️  выпуск отложенного respond: %.60q", callID, a)
 						if err := yandexClient.TriggerResponse(a); err != nil {
 							log.Printf("[%s] ⚠️  Ошибка отложенного response.create: %v\n", callID, err)
 						}

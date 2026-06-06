@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 
 	"tg_bot/internal/domain/entity"
@@ -159,12 +160,14 @@ func (u *CallUsecase) ConfirmCall(ctx context.Context, userID int64, callerName 
 func (u *CallUsecase) AnswerClarification(ctx context.Context, userID int64, clarificationID, answer string) error {
 	v, ok := u.live.Load(userID)
 	if !ok {
+		log.Printf("[clarify] AnswerClarification: нет активного звонка для user=%d", userID)
 		return fmt.Errorf("нет активного звонка")
 	}
 	lc := v.(*liveCall)
 	if lc.respond == nil {
 		return fmt.Errorf("ответ недоступен")
 	}
+	log.Printf("[clarify] AnswerClarification user=%d call=%s clar=%s", userID, lc.callID, clarificationID)
 	return lc.respond(clarificationID, answer)
 }
 
@@ -255,6 +258,7 @@ func watchEvents(events <-chan entity.CallEvent) <-chan CallUpdate {
 					Question        string `json:"question"`
 				}
 				_ = json.Unmarshal(ev.Payload, &p)
+				log.Printf("[clarify] <- clarification.request call=%s clar=%s q=%q", ev.CallID, p.ClarificationID, p.Question)
 				snap := make([]TranscriptEntry, len(transcript))
 				copy(snap, transcript)
 				ch <- CallUpdate{

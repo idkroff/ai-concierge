@@ -73,9 +73,8 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 		if msg.Action == "clarification.response" {
 			// Ответ клиента на доуточнение во время звонка — доставляем в живой звонок.
-			if !h.callService.DeliverClarification(msg.CallID, msg.Response) {
-				log.Printf("[ws] clarification.response: нет живого звонка %s", msg.CallID)
-			}
+			log.Printf("[ws] <- clarification.response call=%s clar=%s resp=%q", msg.CallID, msg.ClarificationID, msg.Response)
+			h.callService.DeliverClarification(msg.CallID, msg.Response)
 			continue
 		}
 

@@ -257,6 +257,9 @@ func (h *Handler) tryAnswerClarification(c tele.Context) bool {
 	h.mu.Unlock()
 
 	if !ok || time.Now().After(pc.deadline) {
+		if ok {
+			log.Printf("[clarify] user=%d ответ пришёл, но окно истекло (clar=%s)", userID, pc.clarID)
+		}
 		return false
 	}
 
@@ -264,6 +267,7 @@ func (h *Handler) tryAnswerClarification(c tele.Context) bool {
 	if answer == "" {
 		return false
 	}
+	log.Printf("[clarify] user=%d перехват ответа на clar=%s: %q", userID, pc.clarID, answer)
 
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
@@ -419,6 +423,7 @@ func (h *Handler) streamUpdates(bot *tele.Bot, chat *tele.Chat, userID int64, st
 	for upd := range updates {
 		// Вопрос агента клиенту — отдельным сообщением + взводим ожидание ответа.
 		if upd.ClarificationQuestion != "" {
+			log.Printf("[clarify] user=%d вопрос от агента clar=%s: %q", userID, upd.ClarificationID, upd.ClarificationQuestion)
 			h.armClarification(userID, upd.ClarificationID)
 			_, _ = bot.Send(chat, "❓ "+upd.ClarificationQuestion+"\n\n<i>Ответьте сообщением в течение 30 секунд — я продолжу разговор.</i>", tele.ModeHTML)
 			continue
