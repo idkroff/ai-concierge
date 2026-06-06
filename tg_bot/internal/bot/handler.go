@@ -46,10 +46,9 @@ type Handler struct {
 	ctx       context.Context
 
 	mu      sync.Mutex
-	pending map[int64]*pendingClarification // ожидание ответа на доуточнение
+	pending map[int64]*pendingClarification
 }
 
-// pendingClarification — взведённое ожидание ответа пользователя на вопрос агента.
 type pendingClarification struct {
 	clarID   string
 	deadline time.Time
@@ -244,8 +243,7 @@ func (h *Handler) onText(c tele.Context, btnConfirm, btnCancel tele.Btn) error {
 	return h.onMessage(c, btnConfirm, btnCancel)
 }
 
-// tryAnswerClarification перехватывает текст как ответ на активный вопрос агента.
-// Возвращает true, если сообщение было обработано как ответ.
+// tryAnswerClarification перехватывает текст как ответ на активный вопрос агента; true — если обработано.
 func (h *Handler) tryAnswerClarification(c tele.Context) bool {
 	userID := c.Sender().ID
 

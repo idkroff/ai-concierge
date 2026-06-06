@@ -19,8 +19,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// fillerHoldPCM — короткий аудио-клип «секундочку, уточняю» (8kHz LPCM 16-bit mono),
-// проигрывается собеседнику, пока ждём ответ клиента в интерактивном режиме.
+// Аудио-филлер «секундочку, уточняю», проигрывается собеседнику, пока ждём ответ клиента.
 //
 //go:embed filler_hold.pcm
 var fillerHoldPCM []byte
@@ -32,10 +31,9 @@ type CallService struct {
 	cancel         context.CancelFunc
 
 	mu    sync.Mutex
-	calls map[string]*CallControl // callID -> управление живым звонком
+	calls map[string]*CallControl
 }
 
-// CallControl — канал доставки ответа клиента в живой звонок.
 type CallControl struct {
 	answers chan string
 }
@@ -210,8 +208,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 					em.Emit(events.NewYandexAudioChunk(callID, len(audioData)))
 				}
 
-				// Задержка перед первым чанком чтобы Asterisk успел подготовиться
-				// и не обрезал начало первого слова
+				// Задержка перед первым чанком, иначе Asterisk обрезает начало первого слова.
 				if firstChunk {
 					firstChunk = false
 					time.Sleep(500 * time.Millisecond)
@@ -279,8 +276,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 		farewellChan := farewellDetected
 		functionCallsCh := yandexClient.FunctionCalls()
 
-		// Стейт-машина уточнения у клиента (интерактивный режим).
-		// Только эта горутина выпускает response.create (R1).
+		// Стейт-машина уточнения. Только эта горутина выпускает response.create.
 		const (
 			clarIdle           = iota
 			clarClarifying     // ask_principal получен, ждём response.done тулзового ответа
@@ -288,13 +284,12 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 			clarResolving      // ответ/таймаут отдан модели, ждём старта ответного response
 		)
 		clarState := clarIdle
-		activeResponse := true // greeting-ответ выпускается сразу после спавна
-		pendingAction := ""    // отложенный response.create (R2), один слот
+		activeResponse := true
+		pendingAction := "" // отложенный response.create, один слот
 		var fcCallID, fcClarID, fcQuestion string
-		var clarTimer <-chan time.Time   // 30с общий таймаут уточнения
-		var fillerTimer <-chan time.Time // повтор филлера, пока ждём ответ
+		var clarTimer <-chan time.Time
+		var fillerTimer <-chan time.Time
 
-		// playFiller проигрывает собеседнику клип «секундочку, уточняю» (8kHz).
 		playFiller := func() {
 			if len(fillerHoldPCM) == 0 {
 				log.Printf("[%s] 🔊 filler: пусто (клип не загружен)", callID)
@@ -310,7 +305,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 			}
 		}
 
-		// respond выпускает response.create, не допуская двух активных ответов (R2).
+		// respond выпускает response.create, не допуская двух активных ответов.
 		respond := func(instr string) {
 			if activeResponse {
 				pendingAction = instr
@@ -337,7 +332,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 			return "Уточните, пожалуйста, как ответить собеседнику."
 		}
 
-		// abortOutstanding закрывает незакрытый tool-call при завершении звонка (R7).
+		// abortOutstanding закрывает незакрытый tool-call при завершении звонка.
 		abortOutstanding := func() {
 			if clarState != clarIdle && fcCallID != "" {
 				_ = yandexClient.SubmitFunctionOutput(fcCallID, "Звонок завершается, уточнение невозможно.")
@@ -363,11 +358,10 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 					continue
 				}
 				log.Printf("[%s] 🛠️  functionCall id=%s name=%q args=%q (clarState=%d)", callID, fc.CallID, fc.Name, fc.Arguments, clarState)
-				// ВНИМАНИЕ: у Yandex call_id НЕ уникален (там имя инструмента),
-				// поэтому дедуп по call_id невозможен — каждый вызов считаем новым.
+				// У Yandex call_id — это имя инструмента, а не уникальный id, поэтому дедуп по нему невозможен.
 				if clarState != clarIdle {
-					// Уже идёт уточнение. Новый вызов игнорируем — НЕ закрываем текущий
-					// через function_call_output (call_id совпал бы и закрыл не тот).
+					// Уже идёт уточнение: текущий вызов НЕ закрываем через function_call_output
+					// (совпавший call_id закрыл бы не тот вызов).
 					log.Printf("[%s] 🛠️  уже идёт уточнение (clarState=%d) — игнор нового вызова", callID, clarState)
 					continue
 				}
@@ -375,15 +369,13 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 				fcQuestion = parseQuestion(fc.Arguments)
 				clarState = clarClarifying
 				log.Printf("[%s] ❓ ask_principal: %s → clarState=Clarifying", callID, fcQuestion)
-				// Сразу даём собеседнику аудио-филлер, чтобы он не слышал тишину
-				// (это аудио-канал Asterisk, не Yandex — сессию не трогает).
+				// Филлер идёт в аудио-канал Asterisk напрямую, минуя Yandex — сессию не трогает.
 				playFiller()
-				// clarification.request — после response.done тулзового ответа (R3)
 
 			case ans := <-cc.answers:
 				if clarState == clarAwaitingAnswer {
 					log.Printf("[%s] 💬 Ответ клиента получен\n", callID)
-					// Сначала закрываем function_call результатом, затем — валидный response.create.
+					// Сначала закрываем function_call результатом, затем — response.create.
 					if err := yandexClient.SubmitFunctionOutput(fcCallID, ans); err != nil {
 						log.Printf("[%s] ⚠️  SubmitFunctionOutput: %v\n", callID, err)
 					}
@@ -421,7 +413,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 
 				switch event.Type {
 				case "response.output_audio.delta", "response.output_text.delta", "response.function_call_arguments.delta":
-					// высокочастотные дельты — без лога
+					// высокочастотные дельты — не логируем
 				default:
 					log.Printf("[%s] 🔔 ev=%s (clar=%d active=%v pending=%v)", callID, event.Type, clarState, activeResponse, pendingAction != "")
 				}
@@ -445,7 +437,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 				case "input_audio_buffer.committed":
 					if speechDetected {
 						speechDetected = false
-						// Во время уточнения НЕ отвечаем собеседнику сами (R4)
+						// Во время уточнения НЕ отвечаем собеседнику сами.
 						if clarState == clarIdle {
 							log.Printf("[%s] ✅ Аудио буфер зафиксирован, генерируем ответ...\n", callID)
 							respond("Ответь на реплику собеседника.")
@@ -457,7 +449,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 				case "response.created":
 					activeResponse = true
 					if clarState == clarResolving {
-						clarState = clarIdle // ответный response стартовал
+						clarState = clarIdle
 						log.Printf("[%s] ↩️  clarState=Resolving→Idle (ответный response стартовал)", callID)
 					}
 					log.Printf("[%s] 🤖 Генерация ответа начата\n", callID)
@@ -473,14 +465,12 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 					}
 
 					if clarState == clarClarifying {
-						// Тулзовый ответ завершён. НЕ выпускаем свой response.create:
-						// пока function_call не закрыт через function_call_output,
-						// любой response.create обрывает сессию Yandex. Филлер
-						// «секунду, уточню» проговаривает сама модель (см. инструкции).
+						// НЕ выпускаем свой response.create: пока function_call не закрыт
+						// через function_call_output, любой response.create обрывает сессию Yandex.
 						fcClarID = uuid.New().String()
 						em.Emit(events.NewClarificationRequest(callID, fcClarID, fcQuestion))
 						clarTimer = time.After(30 * time.Second)
-						fillerTimer = time.After(9 * time.Second) // повторим филлер, если ждём долго
+						fillerTimer = time.After(9 * time.Second)
 						clarState = clarAwaitingAnswer
 						log.Printf("[%s] 📨 Запрос уточнения '%s' (clar=%s) отправлен; clarState=AwaitingAnswer, таймер 30с\n", callID, fcQuestion, fcClarID)
 					} else if pendingAction != "" {
@@ -521,9 +511,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 			return
 		}
 
-		// Сигнализируем Producer что новых данных от Yandex не будет —
-		// он сольёт остатки в буфер и выйдет, что даёт Consumer-у возможность
-		// закрыть AllAudioSent штатно.
+		// Сигнал Producer-у, что данных больше не будет — он сольёт остатки и даст Consumer-у штатно закрыть AllAudioSent.
 		session.SignalAudioOutputDone()
 
 		select {

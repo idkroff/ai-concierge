@@ -82,7 +82,6 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 			phoneNumber := msg.PhoneNumber
 			callContext := msg.Text
 
-			// Если phone_number не передан — парсим из text
 			if phoneNumber == "" {
 				if msg.Text == "" {
 					emitter.Emit(events.NewCallError("", "phone_number or text required", "ws"))

@@ -5,9 +5,7 @@ import (
 	"time"
 )
 
-// Типы событий — добавляй новые константы и payload-структуры по необходимости.
 const (
-	// Подключение
 	WSConnected = "ws.connected"
 
 	// Жизненный цикл звонка
@@ -40,7 +38,7 @@ const (
 	ClarificationTimeout  = "clarification.timeout"
 )
 
-// Event — универсальный envelope для любого события.
+// Event — envelope для любого события.
 type Event struct {
 	Type      string          `json:"type"`
 	CallID    string          `json:"call_id,omitempty"`
@@ -57,8 +55,6 @@ type Emitter interface {
 type NoopEmitter struct{}
 
 func (NoopEmitter) Emit(Event) {}
-
-// Конструкторы событий (удобно добавлять новые: константа + функция).
 
 func NewCallStarted(callID, phoneNumber string) Event {
 	return newEvent(CallStarted, callID, map[string]string{"phone_number": phoneNumber})

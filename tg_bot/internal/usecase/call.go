@@ -24,25 +24,22 @@ const (
 	RoleCallee TranscriptRole = "callee"
 )
 
-// TranscriptEntry — одна реплика в диалоге.
 type TranscriptEntry struct {
 	Role TranscriptRole
 	Text string
 }
 
-// CallUpdate — текущее состояние звонка для отображения.
 type CallUpdate struct {
 	Transcript      []TranscriptEntry
-	AgentStreaming  string // текст агента в процессе генерации
-	AbonentSpeaking bool   // абонент сейчас говорит
+	AgentStreaming  string
+	AbonentSpeaking bool
 	Ended           bool
 	EndReason       string
 	Error           string
 
-	// Интерактивный режим: запрос доуточнения у клиента
 	ClarificationID       string
 	ClarificationQuestion string
-	Notice                string // разовое инфо-сообщение (напр. таймаут уточнения)
+	Notice                string
 }
 
 type ConfirmationRequest struct {
@@ -61,10 +58,10 @@ type CallResult struct {
 type CallUsecase struct {
 	sessions repo.SessionRepository
 	caller   CallerClient
-	live     sync.Map // userID -> *liveCall (активные звонки для доуточнения)
+	live     sync.Map // userID -> *liveCall
 }
 
-// liveCall — хендл активного звонка для отправки ответа на доуточнение.
+// liveCall — хендл активного звонка для ответа на доуточнение.
 type liveCall struct {
 	callID  string
 	respond func(clarificationID, answer string) error

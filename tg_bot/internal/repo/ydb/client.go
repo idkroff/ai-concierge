@@ -69,8 +69,7 @@ func (c *Client) EnsureTables(ctx context.Context) error {
 		}
 	}
 
-	// Миграция: добиваем колонку interactive_mode на уже существующей users
-	// (CREATE выше пропускается, если таблица уже есть).
+	// CREATE выше пропускается для уже существующих таблиц, поэтому колонку добавляем отдельным ALTER
 	if err := c.ensureColumn(ctx, "users", "interactive_mode", "Bool"); err != nil {
 		return err
 	}
@@ -87,7 +86,7 @@ func (c *Client) ensureColumn(ctx context.Context, tableName, column, ydbType st
 		}
 		for _, col := range desc.Columns {
 			if col.Name == column {
-				return nil // уже есть
+				return nil
 			}
 		}
 		ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, column, ydbType)

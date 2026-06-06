@@ -49,7 +49,7 @@ const interactiveInstructions = `
 - Вызывай инструмент МОЛЧА: не произноси и не зачитывай вслух ни вызов, ни его аргументы, ни JSON.
 - После того как получишь уточнение, продолжи разговор с учётом этой информации.`
 
-// BuildInstructionsInteractive — инструкции + блок про инструмент ask_principal.
+// BuildInstructionsInteractive добавляет блок про ask_principal.
 func (c *AppConfig) BuildInstructionsInteractive(userContext string) string {
 	return c.BuildInstructions(userContext) + interactiveInstructions
 }

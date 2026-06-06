@@ -24,7 +24,7 @@ type Client struct {
 
 func NewClient(baseURL string) *Client {
 	httpBase := baseURL
-	if strings.HasPrefix(baseURL, "ws") { // ws:// -> http://, wss:// -> https://
+	if strings.HasPrefix(baseURL, "ws") { // ws->http, wss->https
 		httpBase = "http" + strings.TrimPrefix(baseURL, "ws")
 	}
 	return &Client{
@@ -50,7 +50,7 @@ type apiError struct {
 	Error string `json:"error"`
 }
 
-// Parse — preview через /parse caller-сервиса: резолв номера без старта звонка.
+// Parse резолвит номер через /parse, не стартуя звонок.
 func (c *Client) Parse(ctx context.Context, message string) (*entity.ParsedCall, error) {
 	body, err := json.Marshal(parseRequest{Text: message})
 	if err != nil {
@@ -114,34 +114,32 @@ type errorPayload struct {
 	Message string `json:"message"`
 }
 
-// StartCall открывает ws-звонок. Возвращает функцию respond для отправки ответа
-// клиента на доуточнение по тому же соединению (интерактивный режим).
+// StartCall открывает ws-звонок и возвращает respond для ответов на доуточнения
+// по тому же соединению.
 func (c *Client) StartCall(ctx context.Context, phoneNumber, text string, interactive bool) (string, <-chan entity.CallEvent, func(clarificationID, answer string) error, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.wsURL, nil)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("ws dial: %w", err)
 	}
 
-	// Читаем ws.connected
-	if _, _, err := conn.ReadMessage(); err != nil {
+	if _, _, err := conn.ReadMessage(); err != nil { // ws.connected
 		conn.Close()
 		return "", nil, nil, fmt.Errorf("ws read connected: %w", err)
 	}
 
-	// Отправляем команду с уже найденным номером (caller-сервис не парсит повторно)
+	// Номер уже найден — caller-сервис не парсит повторно.
 	if err := conn.WriteJSON(startCallMsg{Action: "start_call", PhoneNumber: phoneNumber, Text: text, Interactive: interactive}); err != nil {
 		conn.Close()
 		return "", nil, nil, fmt.Errorf("ws write: %w", err)
 	}
 
-	// Ждём call.started или call.error (в рамках ctx с timeout)
 	callID, err := waitForCallStarted(ctx, conn)
 	if err != nil {
 		conn.Close()
 		return "", nil, nil, err
 	}
 
-	// Дальше события идут в фоне - снимаем дедлайн и читаем до конца звонка
+	// Дальше события идут в фоне — снимаем дедлайн чтения.
 	conn.SetReadDeadline(time.Time{})
 
 	// writeMu сериализует писателей в conn (gorilla: 1 reader + 1 writer):
