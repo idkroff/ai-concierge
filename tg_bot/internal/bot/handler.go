@@ -432,23 +432,16 @@ func (h *Handler) streamUpdates(bot *tele.Bot, chat *tele.Chat, userID int64, st
 		}
 
 		if upd.Ended {
-			if upd.Error != "" {
-				_, _ = bot.Edit(statusMsg, renderStatus(shortID, upd)+"\n📵 <b>Звонок завершён</b>", tele.ModeHTML)
-				_, _ = bot.Send(chat, "Ошибка: "+upd.Error)
-				return
-			}
-			if upd.Summary != "" {
-				finalText := summaryEmoji(upd.SummaryStatus) + " <b>Итог звонка:</b>\n" + html.EscapeString(upd.Summary)
-				// для ненормальной концовки добавляем короткую причину
-				if upd.EndReason != "farewell" {
-					finalText += "\n\n<i>" + formatReason(upd.EndReason) + "</i>"
-				}
-				_, _ = bot.Edit(statusMsg, finalText, tele.ModeHTML)
-				return
-			}
-			// итога нет (LLM не ответил) — показываем транскрипцию как раньше
 			_, _ = bot.Edit(statusMsg, renderStatus(shortID, upd)+"\n📵 <b>Звонок завершён</b>", tele.ModeHTML)
-			_, _ = bot.Send(chat, "Причина завершения: "+formatReason(upd.EndReason))
+			if upd.Error != "" {
+				_, _ = bot.Send(chat, "Ошибка: "+upd.Error)
+			} else {
+				_, _ = bot.Send(chat, "Причина завершения: "+formatReason(upd.EndReason))
+			}
+			// Краткий итог — отдельным новым сообщением
+			if upd.Summary != "" {
+				_, _ = bot.Send(chat, summaryEmoji(upd.SummaryStatus)+" <b>Итог звонка:</b>\n"+html.EscapeString(upd.Summary), tele.ModeHTML)
+			}
 			return
 		}
 
