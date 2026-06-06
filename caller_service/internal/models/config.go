@@ -38,6 +38,21 @@ func (c *AppConfig) BuildInstructions(userContext string) string {
 	return strings.ReplaceAll(c.InstructionsTemplate, "{context}", userContext)
 }
 
+const interactiveInstructions = `
+
+КОГДА НЕ ЗНАЕШЬ ОТВЕТ (важно):
+- Если собеседник спрашивает то, чего ты не можешь знать и что известно только клиенту
+  (число гостей, на чьё имя, дата/время, предпочтения, детали заказа) — НЕ ВЫДУМЫВАЙ ответ,
+  а вызови инструмент ask_principal с конкретным вопросом к клиенту (поле question).
+- ВАЖНО: вызывай инструмент молча. НЕ произноси и НЕ зачитывай вслух ни сам вызов,
+  ни его аргументы, ни JSON. Собеседнику ничего про инструмент говорить не нужно.
+- После того как получишь уточнение, продолжи разговор с учётом этой информации.`
+
+// BuildInstructionsInteractive — инструкции + блок про инструмент ask_principal.
+func (c *AppConfig) BuildInstructionsInteractive(userContext string) string {
+	return c.BuildInstructions(userContext) + interactiveInstructions
+}
+
 func LoadConfig() (*AppConfig, error) {
 	_ = godotenv.Load()
 

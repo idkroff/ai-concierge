@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"concierge/pkg/asterisk"
 	"concierge/pkg/audio"
 	"concierge/pkg/yandex"
+
+	"github.com/google/uuid"
 )
 
 type CallService struct {
@@ -20,6 +23,14 @@ type CallService struct {
 	config         *models.AppConfig
 	ctx            context.Context
 	cancel         context.CancelFunc
+
+	mu    sync.Mutex
+	calls map[string]*CallControl // callID -> управление живым звонком
+}
+
+// CallControl — канал доставки ответа клиента в живой звонок.
+type CallControl struct {
+	answers chan string
 }
 
 func NewCallService(config *models.AppConfig) (*CallService, error) {
@@ -38,24 +49,61 @@ func NewCallService(config *models.AppConfig) (*CallService, error) {
 		config:         config,
 		ctx:            ctx,
 		cancel:         cancel,
+		calls:          make(map[string]*CallControl),
 	}, nil
 }
 
-func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em events.Emitter) {
+func (s *CallService) registerCall(callID string) *CallControl {
+	cc := &CallControl{answers: make(chan string, 1)}
+	s.mu.Lock()
+	s.calls[callID] = cc
+	s.mu.Unlock()
+	return cc
+}
+
+func (s *CallService) unregisterCall(callID string) {
+	s.mu.Lock()
+	delete(s.calls, callID)
+	s.mu.Unlock()
+}
+
+// DeliverClarification доставляет ответ клиента в живой звонок (не блокирует).
+func (s *CallService) DeliverClarification(callID, response string) bool {
+	s.mu.Lock()
+	cc := s.calls[callID]
+	s.mu.Unlock()
+	if cc == nil {
+		return false
+	}
+	select {
+	case cc.answers <- response:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *CallService) HandleCall(callID, phoneNumber, userContext string, interactive bool, em events.Emitter) {
 	if em == nil {
 		em = events.NoopEmitter{}
 	}
-	log.Printf("[%s] 📞 Звонок на номер: %s\n", callID, phoneNumber)
+	log.Printf("[%s] 📞 Звонок на номер: %s (интерактивный: %v)\n", callID, phoneNumber, interactive)
 	log.Printf("[%s] 📝 Контекст: %s\n", callID, userContext)
 	em.Emit(events.NewCallStarted(callID, phoneNumber))
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
+	cc := s.registerCall(callID)
+	defer s.unregisterCall(callID)
+
 	instructions := s.config.BuildInstructions(userContext)
+	if interactive {
+		instructions = s.config.BuildInstructionsInteractive(userContext)
+	}
 	em.Emit(events.NewCallConnecting(callID, "yandex"))
 	em.Emit(events.NewYandexConnecting(callID))
-	yandexClient := yandex.NewClient(s.config.APIKey, s.config.Folder, instructions)
+	yandexClient := yandex.NewClient(s.config.APIKey, s.config.Folder, instructions, interactive)
 	if err := yandexClient.Connect(); err != nil {
 		log.Printf("[%s] ❌ Ошибка подключения к Yandex: %v\n", callID, err)
 		em.Emit(events.NewCallError(callID, err.Error(), "yandex"))
@@ -219,17 +267,114 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em eve
 		var farewellReceived bool
 		var responseDoneSent bool
 		farewellChan := farewellDetected
+		functionCallsCh := yandexClient.FunctionCalls()
+
+		// Стейт-машина уточнения у клиента (интерактивный режим).
+		// Только эта горутина выпускает response.create (R1).
+		const (
+			clarIdle           = iota
+			clarClarifying     // ask_principal получен, ждём response.done тулзового ответа
+			clarAwaitingAnswer // сказали филлер, ждём ответа клиента (до 30с)
+			clarResolving      // ответ/таймаут отдан модели, ждём старта ответного response
+		)
+		clarState := clarIdle
+		activeResponse := true // greeting-ответ выпускается сразу после спавна
+		pendingAction := ""    // отложенный response.create (R2), один слот
+		var fcCallID, fcClarID, fcQuestion string
+		lastHandledFC := ""
+		var clarTimer <-chan time.Time
+
+		// respond выпускает response.create, не допуская двух активных ответов (R2).
+		respond := func(instr string) {
+			if activeResponse {
+				pendingAction = instr
+				return
+			}
+			activeResponse = true
+			if err := yandexClient.TriggerResponse(instr); err != nil {
+				log.Printf("[%s] ⚠️  Ошибка response.create: %v\n", callID, err)
+			}
+		}
+
+		parseQuestion := func(args string) string {
+			var p struct {
+				Question string `json:"question"`
+			}
+			if json.Unmarshal([]byte(args), &p) == nil && p.Question != "" {
+				return p.Question
+			}
+			if args != "" {
+				return args
+			}
+			return "Уточните, пожалуйста, как ответить собеседнику."
+		}
+
+		// abortOutstanding закрывает незакрытый tool-call при завершении звонка (R7).
+		abortOutstanding := func() {
+			if clarState != clarIdle && fcCallID != "" {
+				_ = yandexClient.SubmitFunctionOutput(fcCallID, "Звонок завершается, уточнение невозможно.")
+			}
+		}
 
 		for {
 			select {
 			case <-ctx.Done():
+				abortOutstanding()
 				return
 			case <-session.Done:
+				abortOutstanding()
 				return
 			case <-farewellChan:
 				farewellReceived = true
 				farewellChan = nil
 				log.Printf("[%s] 📍 Флаг прощания установлен, отслеживаем response.done...\n", callID)
+
+			case fc, ok := <-functionCallsCh:
+				if !ok {
+					functionCallsCh = nil
+					continue
+				}
+				if fc.CallID == lastHandledFC || fc.CallID == fcCallID {
+					continue // дубликат фолбэк-парсера
+				}
+				if clarState != clarIdle {
+					log.Printf("[%s] ⚠️  ask_principal во время другого уточнения — busy\n", callID)
+					_ = yandexClient.SubmitFunctionOutput(fc.CallID, "Сейчас обрабатывается другой вопрос. Ответь собеседнику сам.")
+					continue
+				}
+				fcCallID = fc.CallID
+				fcQuestion = parseQuestion(fc.Arguments)
+				clarState = clarClarifying
+				log.Printf("[%s] ❓ ask_principal: %s\n", callID, fcQuestion)
+				// филлер и clarification.request — после response.done тулзового ответа (R3)
+
+			case ans := <-cc.answers:
+				if clarState == clarAwaitingAnswer {
+					log.Printf("[%s] 💬 Ответ клиента получен\n", callID)
+					// Сначала закрываем function_call результатом, затем — валидный response.create.
+					if err := yandexClient.SubmitFunctionOutput(fcCallID, ans); err != nil {
+						log.Printf("[%s] ⚠️  SubmitFunctionOutput: %v\n", callID, err)
+					}
+					respond("Клиент уточнил: " + ans + ". Ответь собеседнику по сути, кратко, на русском.")
+					em.Emit(events.NewClarificationResolved(callID, fcClarID))
+					lastHandledFC = fcCallID
+					clarState = clarResolving
+					clarTimer = nil
+					fcCallID, fcQuestion, fcClarID = "", "", ""
+				}
+
+			case <-clarTimer:
+				if clarState == clarAwaitingAnswer {
+					log.Printf("[%s] ⏱️  Таймаут уточнения (30с)\n", callID)
+					_ = yandexClient.SubmitFunctionOutput(fcCallID, "Клиент не ответил вовремя, информация недоступна.")
+					respond("Вежливо извинись, что не получилось уточнить прямо сейчас, и продолжи разговор по сути. Не завершай звонок.")
+					em.Emit(events.NewClarificationTimeout(callID, fcClarID))
+					lastHandledFC = fcCallID
+					clarState = clarResolving
+					clarTimer = nil
+					fcCallID, fcQuestion, fcClarID = "", "", ""
+				}
+
 			case event, ok := <-yandexClient.Events():
 				if !ok {
 					return
@@ -253,23 +398,50 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, em eve
 
 				case "input_audio_buffer.committed":
 					if speechDetected {
-						log.Printf("[%s] ✅ Аудио буфер зафиксирован, генерируем ответ...\n", callID)
-						if err := yandexClient.TriggerResponse("Ответь на реплику собеседника."); err != nil {
-							log.Printf("[%s] ⚠️  Ошибка запроса ответа: %v\n", callID, err)
-						}
 						speechDetected = false
+						// Во время уточнения НЕ отвечаем собеседнику сами (R4)
+						if clarState == clarIdle {
+							log.Printf("[%s] ✅ Аудио буфер зафиксирован, генерируем ответ...\n", callID)
+							respond("Ответь на реплику собеседника.")
+						} else {
+							log.Printf("[%s] ⏸️  Реплика во время уточнения — ответ подавлен\n", callID)
+						}
 					}
 
 				case "response.created":
+					activeResponse = true
+					if clarState == clarResolving {
+						clarState = clarIdle // ответный response стартовал
+					}
 					log.Printf("[%s] 🤖 Генерация ответа начата\n", callID)
 
 				case "response.done":
+					activeResponse = false
 					log.Printf("[%s] ✅ Ответ завершен\n", callID)
 					em.Emit(events.NewYandexResponseDone(callID))
 					if farewellReceived && !responseDoneSent {
 						log.Printf("[%s] 🎯 response.done получен после прощания\n", callID)
 						responseDoneSent = true
 						close(responseDoneAfterFarewell)
+					}
+
+					if clarState == clarClarifying {
+						// Тулзовый ответ завершён. НЕ выпускаем свой response.create:
+						// пока function_call не закрыт через function_call_output,
+						// любой response.create обрывает сессию Yandex. Филлер
+						// «секунду, уточню» проговаривает сама модель (см. инструкции).
+						fcClarID = uuid.New().String()
+						em.Emit(events.NewClarificationRequest(callID, fcClarID, fcQuestion))
+						clarTimer = time.After(30 * time.Second)
+						clarState = clarAwaitingAnswer
+						log.Printf("[%s] 📨 Запрос уточнения отправлен клиенту\n", callID)
+					} else if pendingAction != "" {
+						a := pendingAction
+						pendingAction = ""
+						activeResponse = true
+						if err := yandexClient.TriggerResponse(a); err != nil {
+							log.Printf("[%s] ⚠️  Ошибка отложенного response.create: %v\n", callID, err)
+						}
 					}
 				}
 			}

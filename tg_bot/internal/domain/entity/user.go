@@ -1,7 +1,8 @@
 package entity
 
 type User struct {
-	UserID int64
-	Name   string
-	Phone  string
+	UserID          int64
+	Name            string
+	Phone           string
+	InteractiveMode bool
 }

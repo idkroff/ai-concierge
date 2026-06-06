@@ -7,6 +7,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"tg_bot/internal/domain/entity"
@@ -43,10 +44,27 @@ type Handler struct {
 	userUC    *usecase.UserUsecase
 	usedCalls repo.UsedCallsRepository
 	ctx       context.Context
+
+	mu      sync.Mutex
+	pending map[int64]*pendingClarification // ожидание ответа на доуточнение
 }
 
+// pendingClarification — взведённое ожидание ответа пользователя на вопрос агента.
+type pendingClarification struct {
+	clarID   string
+	deadline time.Time
+}
+
+const clarificationWindow = 28 * time.Second // чуть меньше 30с на стороне caller
+
 func NewHandler(callUC *usecase.CallUsecase, userUC *usecase.UserUsecase, usedCalls repo.UsedCallsRepository, ctx context.Context) *Handler {
-	return &Handler{callUC: callUC, userUC: userUC, usedCalls: usedCalls, ctx: ctx}
+	return &Handler{
+		callUC:    callUC,
+		userUC:    userUC,
+		usedCalls: usedCalls,
+		ctx:       ctx,
+		pending:   make(map[int64]*pendingClarification),
+	}
 }
 
 func (h *Handler) Register(b *tele.Bot) {
@@ -56,6 +74,7 @@ func (h *Handler) Register(b *tele.Bot) {
 	b.Handle("/start", h.onStart)
 	b.Handle("/help", h.onHelp)
 	b.Handle("/name", h.onName)
+	b.Handle("/interactive", h.onInteractive)
 	b.Handle("/droplimits", h.onDropLimits)
 	b.Handle(tele.OnContact, h.onContact)
 
@@ -71,6 +90,7 @@ func (h *Handler) Register(b *tele.Bot) {
 		{Text: "start", Description: "Запуск и краткая справка"},
 		{Text: "help", Description: "Помощь"},
 		{Text: "name", Description: "Имя, от которого я звоню"},
+		{Text: "interactive", Description: "Доуточнение во время звонка вкл/выкл"},
 	}); err != nil {
 		log.Printf("SetCommands error: %v", err)
 	}
@@ -166,6 +186,27 @@ func (h *Handler) onName(c tele.Context) error {
 	return c.Send(fmt.Sprintf("✅ Имя сохранено: <b>%s</b>", html.EscapeString(name)), tele.ModeHTML)
 }
 
+// /interactive — вкл/выкл доуточнение у клиента во время звонка
+func (h *Handler) onInteractive(c tele.Context) error {
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	user, ok := h.requirePhone(ctx, c)
+	if !ok {
+		return nil
+	}
+
+	newVal := !user.InteractiveMode
+	if err := h.userUC.SaveInteractiveMode(ctx, c.Sender().ID, newVal); err != nil {
+		log.Printf("SaveInteractiveMode error: %v", err)
+		return c.Send("Произошла ошибка. Попробуйте ещё раз.")
+	}
+	if newVal {
+		return c.Send("✅ Интерактивный режим включён.\n\nЕсли во время звонка я не буду знать ответ — спрошу вас прямо здесь. Ответьте сообщением в течение 30 секунд, и я продолжу разговор.")
+	}
+	return c.Send("Интерактивный режим выключен.")
+}
+
 // /droplimits — сброс своего дневного счётчика; только для droplimitsWhitelist
 func (h *Handler) onDropLimits(c tele.Context) error {
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
@@ -189,6 +230,11 @@ func (h *Handler) onDropLimits(c tele.Context) error {
 }
 
 func (h *Handler) onText(c tele.Context, btnConfirm, btnCancel tele.Btn) error {
+	// Если ждём ответ на доуточнение во время звонка — перехватываем этот текст.
+	if h.tryAnswerClarification(c) {
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
 	defer cancel()
 
@@ -196,6 +242,54 @@ func (h *Handler) onText(c tele.Context, btnConfirm, btnCancel tele.Btn) error {
 		return nil
 	}
 	return h.onMessage(c, btnConfirm, btnCancel)
+}
+
+// tryAnswerClarification перехватывает текст как ответ на активный вопрос агента.
+// Возвращает true, если сообщение было обработано как ответ.
+func (h *Handler) tryAnswerClarification(c tele.Context) bool {
+	userID := c.Sender().ID
+
+	h.mu.Lock()
+	pc, ok := h.pending[userID]
+	if ok {
+		delete(h.pending, userID)
+	}
+	h.mu.Unlock()
+
+	if !ok || time.Now().After(pc.deadline) {
+		return false
+	}
+
+	answer := strings.TrimSpace(c.Text())
+	if answer == "" {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(h.ctx, handlerTimeout)
+	defer cancel()
+
+	if err := h.callUC.AnswerClarification(ctx, userID, pc.clarID, answer); err != nil {
+		log.Printf("AnswerClarification error: %v", err)
+		_ = c.Send("Не удалось передать ответ — возможно, звонок уже завершился.")
+		return true
+	}
+	_ = c.Send("✅ Передал ваш ответ.")
+	return true
+}
+
+// armClarification взводит ожидание ответа пользователя на вопрос агента.
+func (h *Handler) armClarification(userID int64, clarID string) {
+	h.mu.Lock()
+	h.pending[userID] = &pendingClarification{clarID: clarID, deadline: time.Now().Add(clarificationWindow)}
+	h.mu.Unlock()
+
+	time.AfterFunc(clarificationWindow, func() {
+		h.mu.Lock()
+		if pc, ok := h.pending[userID]; ok && pc.clarID == clarID {
+			delete(h.pending, userID)
+		}
+		h.mu.Unlock()
+	})
 }
 
 func (h *Handler) onMessage(c tele.Context, btnConfirm, btnCancel tele.Btn) error {
@@ -287,7 +381,7 @@ func (h *Handler) onConfirm(c tele.Context) error {
 		return nil
 	}
 
-	result, err := h.callUC.ConfirmCall(ctx, c.Sender().ID, user.Name)
+	result, err := h.callUC.ConfirmCall(ctx, c.Sender().ID, user.Name, user.InteractiveMode)
 	if err != nil {
 		log.Printf("ConfirmCall error: %v", err)
 		_ = c.Edit("Не удалось инициировать звонок: " + err.Error())
@@ -306,7 +400,7 @@ func (h *Handler) onConfirm(c tele.Context) error {
 	statusMsg := c.Message()
 	_ = c.Edit(fmt.Sprintf("📞 Звонок <code>%s</code>\n\n⏳ Подключение...", shortID), tele.ModeHTML)
 
-	go h.streamUpdates(c.Bot(), c.Chat(), statusMsg, shortID, result.Updates)
+	go h.streamUpdates(c.Bot(), c.Chat(), c.Sender().ID, statusMsg, shortID, result.Updates)
 
 	return nil
 }
@@ -321,8 +415,19 @@ func (h *Handler) onCancel(c tele.Context) error {
 	return c.Edit("❌ Звонок отменён.")
 }
 
-func (h *Handler) streamUpdates(bot *tele.Bot, chat *tele.Chat, statusMsg *tele.Message, shortID string, updates <-chan usecase.CallUpdate) {
+func (h *Handler) streamUpdates(bot *tele.Bot, chat *tele.Chat, userID int64, statusMsg *tele.Message, shortID string, updates <-chan usecase.CallUpdate) {
 	for upd := range updates {
+		// Вопрос агента клиенту — отдельным сообщением + взводим ожидание ответа.
+		if upd.ClarificationQuestion != "" {
+			h.armClarification(userID, upd.ClarificationID)
+			_, _ = bot.Send(chat, "❓ "+upd.ClarificationQuestion+"\n\n<i>Ответьте сообщением в течение 30 секунд — я продолжу разговор.</i>", tele.ModeHTML)
+			continue
+		}
+		if upd.Notice != "" {
+			_, _ = bot.Send(chat, upd.Notice)
+			continue
+		}
+
 		if upd.Ended {
 			finalText := renderStatus(shortID, upd) + "\n📵 <b>Звонок завершён</b>"
 			_, _ = bot.Edit(statusMsg, finalText, tele.ModeHTML)

@@ -23,7 +23,7 @@ func NewUserRepository(c *Client) *UserRepository {
 func (r *UserRepository) Get(ctx context.Context, userID int64) (entity.User, error) {
 	query := fmt.Sprintf(`
 		DECLARE $user_id AS Int64;
-		SELECT name, phone
+		SELECT name, phone, interactive_mode
 		FROM %s
 		WHERE user_id = $user_id;
 	`, "users")
@@ -45,9 +45,11 @@ func (r *UserRepository) Get(ctx context.Context, userID int64) (entity.User, er
 		if res.NextResultSet(ctx) && res.NextRow() {
 			found = true
 			var name, phone *string
+			var interactive *bool
 			if err := res.ScanNamed(
 				named.Optional("name", &name),
 				named.Optional("phone", &phone),
+				named.Optional("interactive_mode", &interactive),
 			); err != nil {
 				return err
 			}
@@ -57,6 +59,9 @@ func (r *UserRepository) Get(ctx context.Context, userID int64) (entity.User, er
 			}
 			if phone != nil {
 				user.Phone = *phone
+			}
+			if interactive != nil {
+				user.InteractiveMode = *interactive
 			}
 		}
 		return res.Err()
@@ -75,8 +80,9 @@ func (r *UserRepository) Save(ctx context.Context, user entity.User) error {
 		DECLARE $user_id AS Int64;
 		DECLARE $name AS Utf8;
 		DECLARE $phone AS Utf8;
-		UPSERT INTO %s (user_id, name, phone)
-		VALUES ($user_id, $name, $phone);
+		DECLARE $interactive_mode AS Bool;
+		UPSERT INTO %s (user_id, name, phone, interactive_mode)
+		VALUES ($user_id, $name, $phone, $interactive_mode);
 	`, "users")
 
 	err := r.c.db.Table().Do(ctx, func(ctx context.Context, s table.Session) error {
@@ -85,6 +91,7 @@ func (r *UserRepository) Save(ctx context.Context, user entity.User) error {
 				table.ValueParam("$user_id", types.Int64Value(user.UserID)),
 				table.ValueParam("$name", types.UTF8Value(user.Name)),
 				table.ValueParam("$phone", types.UTF8Value(user.Phone)),
+				table.ValueParam("$interactive_mode", types.BoolValue(user.InteractiveMode)),
 			),
 		)
 		return err

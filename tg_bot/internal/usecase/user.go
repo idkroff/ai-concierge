@@ -53,3 +53,14 @@ func (u *UserUsecase) SavePhone(ctx context.Context, userID int64, phone string)
 	user.Phone = phone
 	return u.users.Save(ctx, user)
 }
+
+func (u *UserUsecase) SaveInteractiveMode(ctx context.Context, userID int64, on bool) error {
+	user, err := u.users.Get(ctx, userID)
+	if errors.Is(err, repo.ErrUserNotFound) {
+		user = entity.User{UserID: userID}
+	} else if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+	user.InteractiveMode = on
+	return u.users.Save(ctx, user)
+}

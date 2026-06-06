@@ -12,4 +12,3 @@ type CallStartResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
-
