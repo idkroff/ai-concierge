@@ -432,13 +432,23 @@ func (h *Handler) streamUpdates(bot *tele.Bot, chat *tele.Chat, userID int64, st
 		}
 
 		if upd.Ended {
-			finalText := renderStatus(shortID, upd) + "\n📵 <b>Звонок завершён</b>"
-			_, _ = bot.Edit(statusMsg, finalText, tele.ModeHTML)
 			if upd.Error != "" {
+				_, _ = bot.Edit(statusMsg, renderStatus(shortID, upd)+"\n📵 <b>Звонок завершён</b>", tele.ModeHTML)
 				_, _ = bot.Send(chat, "Ошибка: "+upd.Error)
-			} else {
-				_, _ = bot.Send(chat, "Причина завершения: "+formatReason(upd.EndReason))
+				return
 			}
+			if upd.Summary != "" {
+				finalText := summaryEmoji(upd.SummaryStatus) + " <b>Итог звонка:</b>\n" + html.EscapeString(upd.Summary)
+				// для ненормальной концовки добавляем короткую причину
+				if upd.EndReason != "farewell" {
+					finalText += "\n\n<i>" + formatReason(upd.EndReason) + "</i>"
+				}
+				_, _ = bot.Edit(statusMsg, finalText, tele.ModeHTML)
+				return
+			}
+			// итога нет (LLM не ответил) — показываем транскрипцию как раньше
+			_, _ = bot.Edit(statusMsg, renderStatus(shortID, upd)+"\n📵 <b>Звонок завершён</b>", tele.ModeHTML)
+			_, _ = bot.Send(chat, "Причина завершения: "+formatReason(upd.EndReason))
 			return
 		}
 
@@ -446,6 +456,19 @@ func (h *Handler) streamUpdates(bot *tele.Bot, chat *tele.Chat, userID int64, st
 		if _, err := bot.Edit(statusMsg, text, tele.ModeHTML); err != nil {
 			log.Printf("[stream] edit message: %v", err)
 		}
+	}
+}
+
+func summaryEmoji(status string) string {
+	switch status {
+	case "success":
+		return "✅"
+	case "partial":
+		return "⚠️"
+	case "failed":
+		return "❌"
+	default:
+		return "ℹ️"
 	}
 }
 

@@ -13,6 +13,7 @@ const (
 	CallConnecting = "call.connecting"
 	CallEnded      = "call.ended"
 	CallError      = "call.error"
+	CallSummary    = "call.summary"
 
 	// Asterisk
 	AsteriskOriginateSent     = "asterisk.originate_sent"
@@ -66,6 +67,10 @@ func NewCallEnded(callID, reason string) Event {
 
 func NewCallError(callID, message, source string) Event {
 	return newEvent(CallError, callID, map[string]string{"message": message, "source": source})
+}
+
+func NewCallSummary(callID, status, summary string) Event {
+	return newEvent(CallSummary, callID, map[string]string{"status": status, "summary": summary})
 }
 
 func NewWSConnected() Event {

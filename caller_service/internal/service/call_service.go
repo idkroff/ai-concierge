@@ -12,6 +12,7 @@ import (
 
 	"concierge/internal/events"
 	"concierge/internal/models"
+	"concierge/internal/summary"
 	"concierge/pkg/asterisk"
 	"concierge/pkg/audio"
 	"concierge/pkg/yandex"
@@ -36,6 +37,43 @@ type CallService struct {
 
 type CallControl struct {
 	answers chan string
+}
+
+// convLog копит стенограмму звонка для финальной суммаризации.
+// Пишут две горутины (текст ассистента и реплики собеседника) — отсюда мьютекс.
+type convLog struct {
+	mu      sync.Mutex
+	lines   []string
+	agentSB strings.Builder
+}
+
+func (c *convLog) agentDelta(s string) {
+	c.mu.Lock()
+	c.agentSB.WriteString(s)
+	c.mu.Unlock()
+}
+
+func (c *convLog) flushAgent() {
+	c.mu.Lock()
+	if c.agentSB.Len() > 0 {
+		c.lines = append(c.lines, "Ассистент: "+strings.TrimSpace(c.agentSB.String()))
+		c.agentSB.Reset()
+	}
+	c.mu.Unlock()
+}
+
+func (c *convLog) callee(s string) {
+	c.flushAgent()
+	c.mu.Lock()
+	c.lines = append(c.lines, "Собеседник: "+s)
+	c.mu.Unlock()
+}
+
+func (c *convLog) text() string {
+	c.flushAgent()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Join(c.lines, "\n")
 }
 
 func NewCallService(config *models.AppConfig) (*CallService, error) {
@@ -228,6 +266,8 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 		}
 	}()
 
+	cl := &convLog{} // стенограмма для финального итога
+
 	wg.Add(1)
 	shouldHangup := make(chan struct{})
 	farewellDetected := make(chan struct{})
@@ -252,6 +292,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 					return
 				}
 				fullText += text
+				cl.agentDelta(text)
 				log.Printf("[%s] %s", callID, text)
 				em.Emit(events.NewYandexTextDelta(callID, text))
 
@@ -422,6 +463,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 				case "conversation.item.input_audio_transcription.completed":
 					if event.Transcript != "" {
 						log.Printf("[%s] 👤 Транскрипция: %s\n", callID, event.Transcript)
+						cl.callee(event.Transcript)
 						em.Emit(events.NewYandexInputTranscript(callID, event.Transcript))
 					}
 
@@ -456,6 +498,7 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 
 				case "response.done":
 					activeResponse = false
+					cl.flushAgent()
 					log.Printf("[%s] ✅ Ответ завершен\n", callID)
 					em.Emit(events.NewYandexResponseDone(callID))
 					if farewellReceived && !responseDoneSent {
@@ -556,6 +599,20 @@ func (s *CallService) HandleCall(callID, phoneNumber, userContext string, intera
 	if err := s.asteriskClient.Hangup(session); err != nil {
 		log.Printf("[%s] ⚠️  Ошибка завершения звонка: %v\n", callID, err)
 	}
+
+	// Краткий итог звонка для пользователя (на свежем ctx — ctx звонка уже отменён).
+	if transcript := cl.text(); transcript != "" {
+		sumCtx, sumCancel := context.WithTimeout(context.Background(), 12*time.Second)
+		status, summaryText, err := summary.Generate(sumCtx, s.config.APIKey, s.config.Folder, userContext, transcript)
+		sumCancel()
+		if err != nil {
+			log.Printf("[%s] ⚠️  Суммаризация не удалась: %v\n", callID, err)
+		} else if summaryText != "" {
+			log.Printf("[%s] 📋 Итог [%s]: %s\n", callID, status, summaryText)
+			em.Emit(events.NewCallSummary(callID, status, summaryText))
+		}
+	}
+
 	em.Emit(events.NewCallEnded(callID, endReason))
 
 	done := make(chan struct{})

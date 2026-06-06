@@ -40,6 +40,9 @@ type CallUpdate struct {
 	ClarificationID       string
 	ClarificationQuestion string
 	Notice                string
+
+	Summary       string
+	SummaryStatus string
 }
 
 type ConfirmationRequest struct {
@@ -196,6 +199,7 @@ func watchEvents(events <-chan entity.CallEvent) <-chan CallUpdate {
 		var transcript []TranscriptEntry
 		var agentText string
 		abonentSpeaking := false
+		var summaryText, summaryStatus string
 
 		send := func(ended bool, endReason, errMsg string) {
 			snap := make([]TranscriptEntry, len(transcript))
@@ -207,6 +211,8 @@ func watchEvents(events <-chan entity.CallEvent) <-chan CallUpdate {
 				Ended:           ended,
 				EndReason:       endReason,
 				Error:           errMsg,
+				Summary:         summaryText,
+				SummaryStatus:   summaryStatus,
 			}
 		}
 
@@ -264,6 +270,15 @@ func watchEvents(events <-chan entity.CallEvent) <-chan CallUpdate {
 					ClarificationID:       p.ClarificationID,
 					ClarificationQuestion: p.Question,
 				}
+
+			case "call.summary":
+				var p struct {
+					Status  string `json:"status"`
+					Summary string `json:"summary"`
+				}
+				_ = json.Unmarshal(ev.Payload, &p)
+				summaryText, summaryStatus = p.Summary, p.Status
+				log.Printf("[summary] <- call.summary call=%s status=%s: %q", ev.CallID, p.Status, p.Summary)
 
 			case "clarification.timeout":
 				snap := make([]TranscriptEntry, len(transcript))
