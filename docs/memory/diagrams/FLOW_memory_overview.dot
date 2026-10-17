@@ -1,0 +1,59 @@
+digraph memory_flow {
+  graph [label=<<B>AI Concierge · что добавляет фича «Память» и как она работает</B><BR/><FONT POINT-SIZE="11">зелёное: новое · серое: как сейчас · жёлтое: данные в YDB</FONT>>, labelloc=t, fontname="Helvetica", fontsize=16, rankdir=LR, nodesep=0.4, ranksep=0.5, pad=0.4, bgcolor=white, splines=spline, newrank=true];
+  node  [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, fillcolor="#4caf50", color="#2e7d32", fontcolor=white, margin="0.18,0.1"];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", fontcolor="#333333", arrowsize=0.8];
+
+  MSG [fillcolor="#08427B", color="#073B6F", label=<<B>Сообщение пользователя</B><BR/>«перенеси встречу в ресторане<BR/>на час позже»<BR/>«забронируй как в прошлый раз<BR/>в Пушкине»<BR/>«я всегда прошу тихий зал»>];
+
+  subgraph cluster_hot {
+    label=<<B>⚡ Сразу · ответ за ≤ 3 с</B>  <FONT POINT-SIZE="10">поручение и звонок</FONT>>; labeljust=l; fontname="Helvetica"; fontsize=12; style="rounded"; color="#888888"; bgcolor="#fafafa"; margin=14;
+    INTENT  [label=<<B>Разбор фразы</B> · LLM<BR/>тип поручения + детали>];
+    MATCH   [shape=diamond, style=filled, label=<<B>Какая бронь?</B><BR/>ресторан · дата · время>, margin="0.05,0.02"];
+    FILL    [label=<<B>Подставить из памяти</B><BR/>ресторан, телефон, гости<BR/>из прошлой брони<BR/>+ «Учту: тихий зал» · «Убрать»>];
+    DIFF    [label=<<B>Экран «было → станет»</B><BR/>19:00 → 20:00 · 2 гостя · тихий зал>];
+    NOCALL  [label=<<B>Прошедшая или чужая бронь</B><BR/>ответ без звонка,<BR/>лимит не тратится>];
+    CONFIRM [label=<<B>«Подтвердить»</B> → 📞 звонок в ресторан<BR/><FONT COLOR="#e8f5e9">caller_service, как сейчас</FONT><BR/>«Не менять» → ничего не происходит>];
+    JUDGE   [label=<<B>Итог звонка</B> · LLM по транскрипту<BR/>согласился · отказал · не дозвонились>];
+    SAVE    [shape=cylinder, fillcolor="#f2c14e", color="#b8860b", fontcolor="#1a1a1a", label=<<B>Бронь + история</B><BR/>изменений>];
+    CARD    [label=<<B>Ответ пользователю</B><BR/>карточка брони или<BR/>«Перенос не подтверждён: причина»>];
+    { rank=same; MATCH; FILL; }
+    { rank=same; DIFF; NOCALL; }
+    { rank=same; SAVE; CARD; }
+  }
+
+  subgraph cluster_bg {
+    label=<<B>🧠 В фоне · не задерживает ответ</B>  <FONT POINT-SIZE="10">память о пользователе</FONT>>; labeljust=l; fontname="Helvetica"; fontsize=12; style="rounded"; color="#2e7d32"; bgcolor="#f1f8e9"; margin=14;
+    EXTRACT [label=<<B>Извлечь постоянные пожелания</B><BR/>1 LLM-вызов · зал · стол · время · меню<BR/>разовые, здоровье, другие люди — нет>];
+    DEDUP   [shape=diamond, style=filled, label=<<B>Уже знаем?</B><BR/>нормализация ·<BR/>близость ≥ 0.90>, margin="0.05,0.02"];
+    VERSION [shape=cylinder, fillcolor="#f2c14e", color="#b8860b", fontcolor="#1a1a1a", label=<<B>Факт</B> с версией,<BR/>источником и датой>];
+    SKIP    [fillcolor="#c8e6c9", color="#2e7d32", fontcolor="#1a1a1a", label=<Ничего не делаем>];
+    NOTIFY  [label=<<B>«Запомнил: тихий зал»</B><BR/>кнопка «Забыть»>];
+    { rank=same; VERSION; SKIP; }
+  }
+
+  subgraph cluster_ctrl {
+    label=<<B>🔧 Управление памятью</B>  <FONT POINT-SIZE="10">пользователь видит, что бот помнит</FONT>>; labeljust=l; fontname="Helvetica"; fontsize=12; style="rounded"; color="#888888"; bgcolor="#fafafa"; margin=14;
+    B [label=<<B>/bookings</B> · будущие брони, история каждой>];
+    M [label=<<B>/memory</B> · факты + откуда взяты · Исправить · Удалить>];
+    F [label=<<B>/forget</B> · стереть всё, физически ≤ 24 ч>];
+    { rank=same; B; M; F; }
+    B -> M -> F [style=invis];
+  }
+
+  MSG -> INTENT;
+  MSG -> EXTRACT [style=dashed, label="копия сообщения"];
+  INTENT -> MATCH  [label="перенос · отмена"];
+  INTENT -> FILL   [label="новая бронь ·\n«как в прошлый раз»"];
+  MATCH -> DIFF    [label="одна, или выбор\nкнопкой из нескольких"];
+  MATCH -> NOCALL  [label="прошедшая · нет"];
+  DIFF -> CONFIRM;
+  FILL -> CONFIRM;
+  CONFIRM -> JUDGE;
+  JUDGE -> SAVE;
+  SAVE -> CARD;
+  EXTRACT -> DEDUP;
+  DEDUP -> VERSION [label="новое"];
+  DEDUP -> SKIP    [label="дубль"];
+  VERSION -> NOTIFY;
+  VERSION -> FILL  [style=dotted, color="#2e7d32", fontcolor="#2e7d32", label="в следующую бронь", constraint=false];
+}

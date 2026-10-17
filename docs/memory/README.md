@@ -11,5 +11,6 @@
 | [requirements/2.4_RTM.xlsx](requirements/2.4_RTM.xlsx) | Матрица трассировки PRD → US → SRS → тест-кейсы TC-01…TC-38; собирается скриптом [requirements/build_rtm.py](requirements/build_rtm.py), который сверяет все ID между документами |
 | [research.md](research.md) | Исследование: подходы к памяти LLM-агентов, Yandex AI Studio, YDB, ограничения Telegram, аналоги, выводы для дизайна |
 | [design.md](design.md) | Технический дизайн: архитектура, модель данных YDB, потоки, контракты, события для метрик, трассировка на SRS, план следующего этапа |
+| [diagrams/](diagrams/README.md) | Диаграммы: краткий флоу «как работает память», C4 контейнеры и компоненты, ER-схема YDB; исходники Graphviz и Mermaid рядом |
 
 Файлы `.docx` в `requirements/` сгенерированы из `.md` через pandoc; исходник правды — markdown.
