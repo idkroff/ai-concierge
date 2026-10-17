@@ -1,0 +1,111 @@
+---
+title: "YDB · AI Concierge · схема данных фичи «Память» (связи логические, FK в YDB нет; PK каждой пользовательской таблицы начинается с user_id)"
+config:
+  theme: neutral
+  er:
+    fontSize: 13
+    minEntityWidth: 180
+    entityPadding: 16
+---
+erDiagram
+  users["users · есть"] {
+    Int64 user_id PK "Telegram user_id"
+    Utf8 name
+    Utf8 phone
+    Bool interactive_mode
+  }
+  used_calls["used_calls · есть"] {
+    Int64 user_id PK
+    Uint32 count "звонков за сутки, лимит 3 (FR-21)"
+    Timestamp drop_timestamp "сброс счётчика"
+  }
+  bookings["bookings · новая"] {
+    Int64 user_id PK
+    Utf8 booking_id PK "ULID"
+    Utf8 restaurant_name
+    Utf8 restaurant_norm "нормализованное имя для повтора FR-05"
+    Utf8 restaurant_phone
+    Utf8 venue_type "restaurant | cafe | bar | unknown"
+    Timestamp starts_at "UTC"
+    Date starts_at_local "Europe/Moscow, для Matcher и FR-08"
+    Uint32 guests
+    Utf8 user_name
+    Json preferences "снимок подставленных фактов (FR-16)"
+    Utf8 status "confirmed | refused | no_answer | cancelled"
+    Utf8 last_call_id
+    Timestamp created_at
+    Timestamp updated_at
+    Timestamp deleted_at "soft delete"
+    Timestamp purge_at "TTL PT0S"
+  }
+  booking_history["booking_history · новая"] {
+    Int64 user_id PK
+    Utf8 booking_id PK
+    Utf8 entry_id PK "ULID, DESC = новые сверху (FR-04)"
+    Utf8 action "created | reschedule | cancel"
+    Json old_params
+    Json new_params
+    Utf8 call_id
+    Utf8 outcome "agreed | refused | no_answer | interrupted"
+    Utf8 outcome_reason "причина отказа (FR-12)"
+    Timestamp created_at
+    Timestamp purge_at
+  }
+  preferences["preferences · новая"] {
+    Int64 user_id PK
+    Utf8 pref_id PK "ULID версии"
+    Utf8 fact_key "линия версий одного факта"
+    Uint32 version
+    Utf8 category "hall | table | time | menu"
+    Utf8 value "«тихий зал»"
+    Utf8 value_normalized "нормальная форма от LLM (D-3)"
+    Utf8 norm_key "стемы Snowball, ключ точного совпадения"
+    String embedding "Knn float 256, дедуп cos >= 0.90"
+    Utf8 source_type "message | manual"
+    Utf8 source_ref "chat_id:message_id (FR-20)"
+    Utf8 source_quote "цитата <= 100 символов (FR-17)"
+    Bool is_active "не больше одной на fact_key"
+    Utf8 replaced_by "pref_id следующей версии"
+    Timestamp created_at
+    Timestamp deleted_at
+    Timestamp purge_at
+  }
+  call_transcripts["call_transcripts · новая"] {
+    Int64 user_id PK
+    Utf8 call_id PK
+    Utf8 booking_id
+    Utf8 task_id
+    Utf8 task_type "new_booking | repeat | reschedule | cancel"
+    Json transcript "CallUpdate.Transcript"
+    Utf8 end_reason "farewell | abonent_hangup | timeout | cancelled | error"
+    Utf8 summary
+    Timestamp created_at
+    Timestamp deleted_at
+    Timestamp purge_at
+  }
+  memory_tombstones["memory_tombstones · новая"] {
+    Int64 user_id PK
+    Timestamp requested_at "заявка для PurgeJob, удаляется после очистки"
+  }
+  events["events · новая"] {
+    Utf8 event_id PK "ULID"
+    Timestamp ts
+    Utf8 user_key "u:user_id, после /forget anon:random; индекс GLOBAL SYNC"
+    Utf8 event_type "task_started, call_result, preference_saved, llm_call ..."
+    Utf8 task_id
+    Utf8 task_type
+    Utf8 booking_id
+    Json attrs
+  }
+
+  users ||--o| used_calls : "user_id"
+  users ||--o{ bookings : "user_id"
+  users ||--o{ preferences : "user_id"
+  users ||--o{ call_transcripts : "user_id"
+  users ||--o| memory_tombstones : "заявка /forget"
+  users ||..o{ events : "user_key = u:user_id до обезличивания"
+  bookings ||--o{ booking_history : "booking_id, запись на каждую попытку"
+  bookings |o--o{ call_transcripts : "booking_id"
+  booking_history }o..o| call_transcripts : "call_id"
+  preferences |o..o| preferences : "replaced_by, версии"
+  bookings |o..o{ events : "booking_id"

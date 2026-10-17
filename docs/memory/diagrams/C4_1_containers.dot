@@ -1,0 +1,40 @@
+digraph C4_containers {
+  graph [label=<<B>AI Concierge · фича «Память» · C4 уровень 2: контейнеры</B><BR/><FONT POINT-SIZE="11">серый: без изменений · жёлтый: меняется · зелёный: новое</FONT>>, labelloc=t, fontname="Helvetica", fontsize=16, rankdir=TB, nodesep=0.5, ranksep=0.9, pad=0.4, bgcolor=white, splines=true];
+  node  [shape=plain, fontname="Helvetica", fontsize=11];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555", fontcolor="#333333", arrowsize=0.8];
+
+  user [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" BGCOLOR="#08427B" COLOR="#073B6F" STYLE="rounded"><TR><TD><FONT COLOR="white" POINT-SIZE="13"><B>Пользователь</B></FONT><BR/><FONT COLOR="#d0d8e0" POINT-SIZE="9">[Person]</FONT><BR/><FONT COLOR="white">студент или молодой специалист,<BR/>бронирует столики через Telegram</FONT></TD></TR></TABLE>>];
+  tg   [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" BGCOLOR="#9e9e9e" COLOR="#616161" STYLE="rounded"><TR><TD><FONT COLOR="white" POINT-SIZE="13"><B>Telegram Bot API</B></FONT><BR/><FONT COLOR="#eeeeee" POINT-SIZE="9">[External System]</FONT><BR/><FONT COLOR="white">текст, inline-кнопки,<BR/>callback_data ≤ 64 байт</FONT></TD></TR></TABLE>>];
+
+  subgraph cluster_ac {
+    label=<<B>AI Concierge</B>  <FONT POINT-SIZE="10">[Software System · Yandex Cloud, Kubernetes, ru-central1]</FONT>>; labeljust=l; fontname="Helvetica"; fontsize=12; style="dashed,rounded"; color="#444444"; margin=18;
+    tgbot [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" BGCOLOR="#f2c14e" COLOR="#b8860b" STYLE="rounded"><TR><TD><FONT POINT-SIZE="13"><B>tg_bot</B></FONT><BR/><FONT POINT-SIZE="9">[Container: Go, telebot]</FONT><BR/>есть: интерфейс, сессии, лимит звонков<BR/><B>+</B> брони, память, IntentParser, Matcher,<BR/>OutcomeJudge, фоновый экстрактор,<BR/>события для метрик, PurgeJob</TD></TR></TABLE>>];
+    caller [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" BGCOLOR="#9e9e9e" COLOR="#616161" STYLE="rounded"><TR><TD><FONT COLOR="white" POINT-SIZE="13"><B>caller_service</B></FONT><BR/><FONT COLOR="#eeeeee" POINT-SIZE="9">[Container: Go, Asterisk ARI]</FONT><BR/><FONT COLOR="white">разбор поручения (/parse), звонок,<BR/>события звонка по WebSocket.<BR/>API без изменений</FONT></TD></TR></TABLE>>];
+    ydb   [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" BGCOLOR="#f2c14e" COLOR="#b8860b" STYLE="rounded"><TR><TD><FONT POINT-SIZE="13"><B>YDB serverless</B></FONT><BR/><FONT POINT-SIZE="9">[Container: YQL · шифрование at rest]</FONT><BR/>есть: users, used_calls<BR/><B>+</B> bookings, booking_history,<BR/>preferences (версии, эмбеддинги),<BR/>call_transcripts, events,<BR/>memory_tombstones (TTL)</TD></TR></TABLE>>];
+    { rank=same; tgbot; caller; }
+  }
+
+  ast [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" BGCOLOR="#9e9e9e" COLOR="#616161" STYLE="rounded"><TR><TD><FONT COLOR="white" POINT-SIZE="13"><B>Asterisk / SIP trunk</B></FONT><BR/><FONT COLOR="#eeeeee" POINT-SIZE="9">[External System]</FONT><BR/><FONT COLOR="white">телефония провайдера</FONT></TD></TR></TABLE>>];
+  rt  [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" BGCOLOR="#9e9e9e" COLOR="#616161" STYLE="rounded"><TR><TD><FONT COLOR="white" POINT-SIZE="13"><B>Yandex Realtime API</B></FONT><BR/><FONT COLOR="#eeeeee" POINT-SIZE="9">[External System]</FONT><BR/><FONT COLOR="white">голосовой агент в звонке</FONT></TD></TR></TABLE>>];
+  llm [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" BGCOLOR="#4caf50" COLOR="#2e7d32" STYLE="rounded"><TR><TD><FONT COLOR="white" POINT-SIZE="13"><B>Yandex AI Studio · Alice AI LLM Flash</B></FONT><BR/><FONT COLOR="#e8f5e9" POINT-SIZE="9">[External System · новое]</FONT><BR/><FONT COLOR="white">OpenAI-совместимый API,<BR/>response_format json_schema;<BR/>резерв YandexGPT Pro 5.1</FONT></TD></TR></TABLE>>];
+  emb [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" BGCOLOR="#4caf50" COLOR="#2e7d32" STYLE="rounded"><TR><TD><FONT COLOR="white" POINT-SIZE="13"><B>Yandex Text Embeddings v2-doc</B></FONT><BR/><FONT COLOR="#e8f5e9" POINT-SIZE="9">[External System · новое]</FONT><BR/><FONT COLOR="white">256 измерений,<BR/>дедуп пожеланий cos ≥ 0.90</FONT></TD></TR></TABLE>>];
+
+  user  -> tg    [label="сообщения, кнопки"];
+  tg    -> tgbot [label="updates\n[HTTPS через прокси]"];
+  tgbot -> caller [label="POST /parse · WS /ws start_call\nсобытия звонка"];
+  tgbot -> ydb   [label="YQL, все запросы с user_id"];
+  caller -> ast  [label="ARI / AudioSocket"];
+  caller -> rt   [label="WebSocket"];
+  tgbot -> llm   [label="разбор фразы · извлечение пожеланий\n(фон, 1 вызов на сообщение) · итог звонка"];
+  tgbot -> emb   [label="textEmbedding (фон)"];
+
+
+  subgraph cluster_legend {
+    label="Легенда"; fontname="Helvetica"; fontsize=11; style="rounded"; color="#999999"; margin=10;
+    l0 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5" BGCOLOR="#9e9e9e" COLOR="#616161" STYLE="rounded"><TR><TD><FONT COLOR="white">без изменений</FONT></TD></TR></TABLE>>];
+    l1 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5" BGCOLOR="#f2c14e" COLOR="#b8860b" STYLE="rounded"><TR><TD>меняется</TD></TR></TABLE>>];
+    l2 [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5" BGCOLOR="#4caf50" COLOR="#2e7d32" STYLE="rounded"><TR><TD><FONT COLOR="white">новое</FONT></TD></TR></TABLE>>];
+    { rank=same; l0; l1; l2; }
+    l0 -> l1 -> l2 [style=invis];
+  }
+}

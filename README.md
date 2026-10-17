@@ -16,4 +16,5 @@ Telegram-бот, который по поручению пользователя
 
 - требования: one-pager, PRD, SRS, User Stories, RTM — [docs/memory/requirements](docs/memory/requirements/);
 - исследование подходов и технологий — [docs/memory/research.md](docs/memory/research.md);
-- технический дизайн — [docs/memory/design.md](docs/memory/design.md).
+- технический дизайн — [docs/memory/design.md](docs/memory/design.md);
+- диаграммы (флоу, C4, ER) — [docs/memory/diagrams](docs/memory/diagrams/README.md).
