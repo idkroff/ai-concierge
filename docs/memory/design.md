@@ -197,7 +197,7 @@ CREATE TABLE events (
 | 1. Мягкое удаление | «Удалить всё», одна транзакция | `UPDATE bookings / booking_history / preferences / call_transcripts SET deleted_at = $now, purge_at = $now WHERE user_id = $uid`; `UPSERT memory_tombstones`. Все чтения фильтруют `deleted_at IS NULL` — через 5 с данных не видно |
 | 2. Обезличивание событий | сразу после шага 1, пачками | `UPDATE events ON SELECT event_id, $anon AS user_key FROM events VIEW idx_events_user WHERE user_key = $uk`; `$anon = "anon:" + случайные 16 байт`, нигде не сохраняется |
 | 3. TTL | фон YDB | `Interval("PT0S") ON purge_at`: строки удаляются при следующем проходе фоновой операции (по умолчанию раз в час; `NULL` не трогается; точный момент не гарантирован)[^ttl] |
-| 4. `PurgeJob` | при старте пода и каждые 6 ч | по каждой `memory_tombstones` без `purged_at`: явный `DELETE … WHERE user_id = $uid` по четырём таблицам, затем `SELECT COUNT(*)`; при нулях — `purged_at`, затем удаление самой заявки. Гарантирует ≤ 24 ч независимо от TTL |
+| 4. `PurgeJob` | при старте пода и каждые 6 ч | по каждой заявке в `memory_tombstones`: явный `DELETE … WHERE user_id = $uid` по четырём таблицам, затем `SELECT COUNT(*)`; при нулях — удаление самой заявки (строка с `requested_at` живёт только до подтверждения). Гарантирует ≤ 24 ч независимо от TTL |
 
 Точечные удаления (FR-14 «Забыть», FR-18 «Удалить») — мягкие: версия получает `deleted_at` и `purge_at = now`, из всех выборок исключается сразу, физически стирается тем же TTL + `PurgeJob`. Для пользователя это удаление (FR-14, FR-18), а аудит и откат записи сохраняются (OWASP ASI06, research §3).
 
